@@ -4,6 +4,7 @@
 
 - [官方原文在线阅读](https://rustc-dev-guide.rust-lang.org/)
 - [中文版在线阅读](https://rustcrustc.github.io/rustc-dev-guide-zh/)
+- [中文版翻译仓库地址](https://github.com/RustcRustc/rustc-dev-guide-zh)
 
 ### 招募翻译志愿者
 
