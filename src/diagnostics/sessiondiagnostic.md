@@ -1,0 +1,1 @@
+# Creating Errors With SessionDiagnostic
