@@ -3,7 +3,7 @@
 本项目为 [Rustc Dev Guide](https://github.com/rust-lang/rustc-dev-guide) 的中文翻译。因为原项目还在变动期，为了翻译方便，所以此翻译项目组织结构就不和原项目保持一致了。
 
 - [官方原文在线阅读](https://rustc-dev-guide.rust-lang.org/)
-- [中文版在线阅读]()
+- [中文版在线阅读](https://rustcrustc.github.io/rustc-dev-guide-zh/)
 
 ### 招募翻译志愿者
 

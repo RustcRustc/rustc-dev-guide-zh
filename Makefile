@@ -9,7 +9,7 @@ deploy: init
 	mdbook build
 	rm -rf /tmp/rustcbook/*
 	cp -rp book/* /tmp/rustcbook/
-	cd /tmp/book && \
+	cd /tmp/rustcbook && \
 		git add -A && \
 		git commit -m "deployed on $(shell date) by ${USER}" && \
 		git push origin gh-pages
