@@ -69,7 +69,7 @@
 # 源码表示 (Source Code Representation)
 
 - [序言](./part-3-intro.md)
-- [Command-line arguments](./cli.md)
+- [命令行参数](./cli.md)
 - [The Rustc Driver and Interface](./rustc-driver.md)
     - [Ex: Type checking through `rustc_interface`](./rustc-driver-interacting-with-the-ast.md)
     - [Ex: Getting diagnostics through `rustc_interface`](./rustc-driver-getting-diagnostics.md)
