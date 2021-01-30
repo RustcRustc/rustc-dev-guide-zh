@@ -66,7 +66,7 @@
 - [Parallel Compilation](./parallel-rustc.md)
 - [Rustdoc](./rustdoc-internals.md)
 
-# 源码展示 (Source Code Representation)
+# 源码表示 (Source Code Representation)
 
 - [序言](./part-3-intro.md)
 - [Command-line arguments](./cli.md)
