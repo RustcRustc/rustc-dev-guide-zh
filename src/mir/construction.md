@@ -1,1 +1,0 @@
-# THIR and MIR construction

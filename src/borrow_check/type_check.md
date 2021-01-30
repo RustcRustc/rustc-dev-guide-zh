@@ -1,1 +1,0 @@
-# MIR type checker
