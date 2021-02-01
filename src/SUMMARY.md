@@ -66,13 +66,13 @@
 - [Parallel Compilation](./parallel-rustc.md)
 - [Rustdoc](./rustdoc-internals.md)
 
-# 源码展示 (Source Code Representation)
+# 源码表示 (Source Code Representation)
 
 - [序言](./part-3-intro.md)
-- [Command-line arguments](./cli.md)
-- [The Rustc Driver and Interface](./rustc-driver.md)
-    - [Ex: Type checking through `rustc_interface`](./rustc-driver-interacting-with-the-ast.md)
-    - [Ex: Getting diagnostics through `rustc_interface`](./rustc-driver-getting-diagnostics.md)
+- [命令行参数](./cli.md)
+- [Rustc Driver 和 Rustc Interface](./rustc-driver.md)
+    - [示例：通过 `rustc_interface` 进行类型检查](./rustc-driver-interacting-with-the-ast.md)
+    - [示例：通过 `rustc_interface` 获取诊断信息](./rustc-driver-getting-diagnostics.md)
 - [Syntax and the AST](./syntax-intro.md)
     - [Lexing and Parsing](./the-parser.md)
     - [Macro expansion](./macro-expansion.md)
