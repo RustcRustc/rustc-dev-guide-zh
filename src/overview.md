@@ -30,57 +30,38 @@ rust的编译器在两方面独具特色：首先它会对你的代码进行别�
   外部模块解析入口为`rustc_expand::module::parse_external_mod`。
   以及宏解析入口为[`Parser::parse_nonterminal()`][parse_nonterminal]。
 - 解析经由一系列 `Parser` 工具函数执行，包括`fn bump`，`fn check`，`fn eat`，`fn expect`，`fn look_ahead`。
-- Parsing is organized by the semantic construct that is being parsed. Separate
-  `parse_*` methods can be found in `rustc_parse` `parser` directory. The source
-  file name follows the construct name. For example, the following files are found
-  in the parser:
+- 解析是由要被解析的语义构造所组织的。分离的`parse_*`方法可以在`rustc_parse` `parser`文件夹中找到。
+  源文件的名字和构造名相同。举个例子，在解析器中能找到以下的文件：
     - `expr.rs`
     - `pat.rs`
     - `ty.rs`
     - `stmt.rs`
-- This naming scheme is used across many compiler stages. You will find
-  either a file or directory with the same name across the parsing, lowering,
-  type checking, THIR lowering, and MIR building sources.
-- Macro expansion, AST validation, name resolution, and early linting takes place
-  during this stage of the compile process.
-- The parser uses the standard `DiagnosticBuilder` API for error handling, but we
-  try to recover, parsing a superset of Rust's grammar, while also emitting an error.
-- `rustc_ast::ast::{Crate, Mod, Expr, Pat, ...}` AST nodes are returned from the parser.
-- We then take the AST and [convert it to High-Level Intermediate
-  Representation (HIR)][hir]. This is a compiler-friendly representation of the
-  AST.  This involves a lot of desugaring of things like loops and `async fn`.
-- We use the HIR to do [type inference]. This is the process of automatic
-  detection of the type of an expression.
-- **TODO: Maybe some other things are done here? I think initial type checking
-  happens here? And trait solving?**
-- The HIR is then [lowered to Mid-Level Intermediate Representation (MIR)][mir].
-  - Along the way, we construct the THIR, which is an even more desugared HIR.
-    THIR is used for pattern and exhaustiveness checking. It is also more
-    convenient to convert into MIR than HIR is.
-- The MIR is used for [borrow checking].
-- We (want to) do [many optimizations on the MIR][mir-opt] because it is still
-  generic and that improves the code we generate later, improving compilation
-  speed too.
-  - MIR is a higher level (and generic) representation, so it is easier to do
-    some optimizations at MIR level than at LLVM-IR level. For example LLVM
-    doesn't seem to be able to optimize the pattern the [`simplify_try`] mir
-    opt looks for.
-- Rust code is _monomorphized_, which means making copies of all the generic
-  code with the type parameters replaced by concrete types. To do
-  this, we need to collect a list of what concrete types to generate code for.
-  This is called _monomorphization collection_.
-- We then begin what is vaguely called _code generation_ or _codegen_.
-  - The [code generation stage (codegen)][codegen] is when higher level
-    representations of source are turned into an executable binary. `rustc`
-    uses LLVM for code generation. The first step is to convert the MIR
-    to LLVM Intermediate Representation (LLVM IR). This is where the MIR
-    is actually monomorphized, according to the list we created in the
-    previous step.
-  - The LLVM IR is passed to LLVM, which does a lot more optimizations on it.
-    It then emits machine code. It is basically assembly code with additional
-    low-level types and annotations added. (e.g. an ELF object or wasm).
-  - The different libraries/binaries are linked together to produce the final
-    binary.
+- 这种命名方案被广泛地应用于编译器的各个阶段。你会发现有文件或者文件夹在解析、降低、类型检查、THIR降低、以及MIR源构建。
+- 宏展开、AST验证、命名解析、以及程序错误检查都在编译过程的这个阶段进行。
+- 解析器使用标准 `DiagnosticBuilder` API 来进行错误处理，但是我们希望在一个错误发生时，
+  尝试恢复、解析Rust语法的一个超集。
+- `rustc_ast::ast::{Crate, Mod, Expr, Pat, ...}` AST节点从解析器中被返回。
+- 我们接下来拿到AST并且[将其转化为高级中间标识（HIR）][hir]。这是一种编译器友好的AST表示方法。
+  这包括到很多如循环、`async fn`之类的去语法糖的东西。
+- 我们使用 HIR 来进行[类型推导]。 这是对于一个表达式，自动检测其类型的过程。
+- **TODO：也许在这里还有其他事情被完成了？我认为初始化类型检查在这里进行了？以及 trait 解析？**
+- HIR之后 [被降低为中级中间标识（MIR）][mir]。
+  - 同时，我们构造 THIR ，THIR是去更多语法糖的的 HIR。THIR被用于模式和详尽性检验。
+    同时，它相较于 HIR 更容易被转化为MIR。
+- MIR被用于[借用检查]。
+- 我们（想要）[在 MIR 上做许多优化][mir-opt]因为它仍然是通用的，
+  并且这样能改进我们接下来生成的代码，同时也能加快编译速度。
+  - MIR 是高级（并且通用的）表示形式，所以在 MIR 层做优化要相较于在 LLVM-IR 层更容易。
+    举个例子，LLVM看起来是无法优化 [`simplify_try`] 这样的模式，而mir优化则可以。
+- Rust 代码是 _单态化_ 的，这意味着对于所有所有通用代码进行带被具体类型替换的类型参数的拷贝。
+  要做到这一点，我们要生成一个列表来存储需要为什么具体类型生成代码。这被称为 _单态集合_。
+- 我们接下来开始进行被依稀称作 _代码生成_ 或者 _codegen_。
+  - [代码生成（codegen）][codegen]是将高等级源表示转化为可执行二进制码的过程。
+    `rustc`使用LLVM来进行代码生成。第一步就是将 MIR 转化为 LLVM 中间表示（LLVM IR）。
+    这是 MIR 依据我们由上一步生成的列表来真正被单态化的时候。
+  - LLVM IR 被传给 LLVM，并且由其进行更多的优化。之后它产生机器码，
+    这基本就是添加了附加底层类型以及注解的汇编代码。（比如一个 ELF 对象或者 wasm）。
+  - 不同的库/二进制内容被链接以产生最终的二进制内容。
 
 [String interning]: https://en.wikipedia.org/wiki/String_interning
 [`rustc_lexer`]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_lexer/index.html
