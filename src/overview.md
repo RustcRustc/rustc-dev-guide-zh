@@ -4,50 +4,32 @@
 
 这一章是关于编译程序时的总体过程 —— 所有东西是如何组合起来的。
 
-The rust compiler is special in two ways: it does things to your code that
-other compilers don't do (e.g. borrow checking) and it has a lot of
-unconventional implementation choices (e.g. queries). We will talk about these
-in turn in this chapter, and in the rest of the guide, we will look at all the
-individual pieces in more detail.
+rust的编译器在两方面独具特色：首先它会对你的代码进行别的编译器不会进行的操作（比如借用检查），并且有许多非常规的实现选择（比如查询）。
+我们将会在这一章中逐一讨论这些，并且在指南接下来的部分，我们会更深入细节的审视所有单独的部分。
 
-## What the compiler does to your code
+## 编译器对你的代码做了什么
 
-So first, let's look at what the compiler does to your code. For now, we will
-avoid mentioning how the compiler implements these steps except as needed;
-we'll talk about that later.
+首先，我们来看看编译器对你的代码做了些什么。现在，除非必须，我们会避免提及编译器是如何实现这些步骤的；我们之后才会讨论这些。
 
-- The compile process begins when a user writes a Rust source program in text
-  and invokes the `rustc` compiler on it. The work that the compiler needs to
-  perform is defined by command-line options. For example, it is possible to
-  enable nightly features (`-Z` flags), perform `check`-only builds, or emit
-  LLVM-IR rather than executable machine code. The `rustc` executable call may
-  be indirect through the use of `cargo`.
-- Command line argument parsing occurs in the [`rustc_driver`]. This crate
-  defines the compile configuration that is requested by the user and passes it
-  to the rest of the compilation process as a [`rustc_interface::Config`].
-- The raw Rust source text is analyzed by a low-level lexer located in
-  [`rustc_lexer`]. At this stage, the source text is turned into a stream of
-  atomic source code units known as _tokens_.  The lexer supports the
-  Unicode character encoding.
-- The token stream passes through a higher-level lexer located in
-  [`rustc_parse`] to prepare for the next stage of the compile process. The
-  [`StringReader`] struct is used at this stage to perform a set of validations
-  and turn strings into interned symbols (_interning_ is discussed later).
-  [String interning] is a way of storing only one immutable
-  copy of each distinct string value.
+- 编译步骤从用户编写Rust程序文本并且使用 `rustc` 编译器对其进行处理开始。命令行参数指明了编译器需要做的工作。
+  举个例子，我们可以启用开发版特性（`-Z` 标识），执行 `check`——仅执行构建，或者得到LLVM-IR而不是可执行机器码。
+  通过使用 `cargo`，`rustc` 的执行可能是不直接的。
+- 命令行参数解析在 [`rustc_driver`] 中发生。这个 crate 定义了用户请求的编译配置
+  并且将其作为一个 [`rustc_interface::Config`] 传给接下来的编译过程。
+- 原始的 Rust 源文本被位于 [`rustc_lexer`] 的底层词法分析器分析。在这个阶段，源文本被转化成被称为 _tokens_ 的
+  原子源码单位序列。 词法分析器支持 Unicode 字符编码。
+- token 序列传给了位于 [`rustc_parse`] 的高层词法分析器以为编译流程的下一个阶段做准备。
+  [`StringReader`] 结构体在这个阶段被用于执行一系列的验证工作并且将字符串转化为驻留符号（稍后便会讨论 _驻留_）。
+  [字符串驻留] 是一种将多个相同的不可变字符串只存储一次的技术。
 
-- The lexer has a small interface and doesn't depend directly on the
-  diagnostic infrastructure in `rustc`. Instead it provides diagnostics as plain
-  data which are emitted in `rustc_parse::lexer::mod` as real diagnostics.
-- The lexer preserves full fidelity information for both IDEs and proc macros.
-- The parser [translates the token stream from the lexer into an Abstract Syntax
-  Tree (AST)][parser]. It uses a recursive descent (top-down) approach to syntax
-  analysis. The crate entry points for the parser are the `Parser::parse_crate_mod()` and
-  `Parser::parse_mod()` methods found in `rustc_parse::parser::item`. The external
-  module parsing entry point is `rustc_expand::module::parse_external_mod`. And
-  the macro parser entry point is [`Parser::parse_nonterminal()`][parse_nonterminal].
-- Parsing is performed with a set of `Parser` utility methods including `fn bump`,
-  `fn check`, `fn eat`, `fn expect`, `fn look_ahead`.
+- 词法分析器有小的接口并且不直接依赖于`rustc`中的诊断基础设施。反之，它提供在`rustc_parse::lexer::mod`中被发送为真实诊断
+  的作为普通数据的诊断。
+- 词法分析器为 IDE 以及 过程宏 保留有全保真度的信息。
+- 解析器 [将从词法分析器中得到的token序列转化为抽象语法树（AST）][parser]。它使用递归下降（自上而下）的方式来进行语法解析。
+  解析器的 crate 入口为`rustc_parse::parser::item`中的`Parser::parse_crate_mod()`以及`Parser::parse_mod()`函数。
+  外部模块解析入口为`rustc_expand::module::parse_external_mod`。
+  以及宏解析入口为[`Parser::parse_nonterminal()`][parse_nonterminal]。
+- 解析经由一系列 `Parser` 工具函数执行，包括`fn bump`，`fn check`，`fn eat`，`fn expect`，`fn look_ahead`。
 - Parsing is organized by the semantic construct that is being parsed. Separate
   `parse_*` methods can be found in `rustc_parse` `parser` directory. The source
   file name follows the construct name. For example, the following files are found
