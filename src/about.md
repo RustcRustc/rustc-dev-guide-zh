@@ -41,7 +41,7 @@
 
 - [rustc API docs] -- 编译器的rustdoc文档。
 - [Forge] -- 包含有关Rust的补充文档。
-- [compiler-team] -- rust编译器团队的主页，描述了了开发的过程，活动工作组，团队日历等。
+- [compiler-team] -- rust编译器团队的主页，描述了开发的过程，活动工作组，团队日历等。
 
 [GitHub存储库]: https://github.com/rust-lang/rustc-dev-guide/
 [rustc API docs]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/
