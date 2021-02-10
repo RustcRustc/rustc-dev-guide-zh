@@ -80,47 +80,32 @@ rust的编译器在两方面独具特色：首先它会对你的代码进行别�
 [codegen]: https://rustc-dev-guide.rust-lang.org/backend/codegen.html
 [parse_nonterminal]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/parser/struct.Parser.html#method.parse_nonterminal
 
-## How it does it
+## 编译器是怎么做的
 
-Ok, so now that we have a high-level view of what the compiler does to your
-code, let's take a high-level view of _how_ it does all that stuff. There are a
-lot of constraints and conflicting goals that the compiler needs to
-satisfy/optimize for. For example,
+好，我们现在已经从高层视角看了编译器对你的代码做了什么，那让我们再从高层视角看看编译器是 _怎么_ 做到这些的。
+这里有很多编译器需要满足/优化的限制以及冲突目标。举个例子，
 
-- Compilation speed: how fast is it to compile a program. More/better
-  compile-time analyses often means compilation is slower.
-  - Also, we want to support incremental compilation, so we need to take that
-    into account. How can we keep track of what work needs to be redone and
-    what can be reused if the user modifies their program?
-    - Also we can't store too much stuff in the incremental cache because
-      it would take a long time to load from disk and it could take a lot
-      of space on the user's system...
-- Compiler memory usage: while compiling a program, we don't want to use more
-  memory than we need.
-- Program speed: how fast is your compiled program. More/better compile-time
-  analyses often means the compiler can do better optimizations.
-- Program size: how large is the compiled binary? Similar to the previous
-  point.
-- Compiler compilation speed: how long does it take to compile the compiler?
-  This impacts contributors and compiler maintenance.
-- Implementation complexity: building a compiler is one of the hardest
-  things a person/group can do, and Rust is not a very simple language, so how
-  do we make the compiler's code base manageable?
-- Compiler correctness: the binaries produced by the compiler should do what
-  the input programs says they do, and should continue to do so despite the
-  tremendous amount of change constantly going on.
-- Integration: a number of other tools need to use the compiler in
-  various ways (e.g. cargo, clippy, miri, RLS) that must be supported.
-- Compiler stability: the compiler should not crash or fail ungracefully on the
-  stable channel.
-- Rust stability: the compiler must respect Rust's stability guarantees by not
-  breaking programs that previously compiled despite the many changes that are
-  always going on to its implementation.
-- Limitations of other tools: rustc uses LLVM in its backend, and LLVM has some
-  strengths we leverage and some limitations/weaknesses we need to work around.
+- 编译速度：编译一份程序有多快。更多/好的编译时分析通常意味着编译会更慢。
+  - 与此同时，我们想要支持增量编译，因此我们需要将其纳入考虑。
+    我们怎样才能衡量哪些工作需要被重做，以及当用户修改程序时哪些东西能被重用？
+    - 与此同时，我们不能在增量缓存中存储太多东西，因为这样会花费很多时间来从磁盘上加载
+      并且会占用很多用户的系统空间……
+- 编译器内存占用：当编译一份程序时，我们不希望使用多余的内存。
+- 程序运行速度：编译出来的程序运行得有多快。更多/好的编译时分析通常意味着编译器可以做更好的优化。
+- 程序大小：编译出来的二进制程序有多大？和前一个点类似。
+- 编译器编译速度：编译这个编译器要花多长的时间？这影响着贡献者和编译器的维护。
+- 实现复杂度：制造一个编译器是一个人/组能做到的最困难的事之一，并且 Rust 不是一门非常简单的语言，
+  那么我们应该如何让编译器的代码基础便于管理？
+- 编译正确性：编译器创建的二进制程序应该完成输入程序告诉要做的事，
+  并且应该不论后面持续发生的大量变化持续进行。
+- 整合工作：编译器需要对以不同方式使用编译器的其他工具（比如 cargo，clippy，miri，RLS）提供支持。
+- 编译器稳定性：发布在 stable channel 上的编译器不应该无故崩溃或者出故障。
+- Rust 稳定性：编译器必须遵守 Rust 的稳定性承诺，保证之前能够编译的程序不会因为编译器的实现的许多变化
+  而无法编译。
+- 其他工具的限制：rustc 在后端使用了 LLVM ，一方面我们希望借助 LLVM 的一些好处来优化编译器，
+  另一方面我们需要针对它的一些限制/坏处做一些处理。
 
-So, as you read through the rest of the guide, keep these things in mind. They
-will often inform decisions that we make.
+总之，当你阅读指南的接下来的部分的时候，好好记住这些事。他们将通常会指引我们作出选择。
 
 ### Intermediate representations
 
