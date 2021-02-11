@@ -26,7 +26,7 @@ rust的编译器在两方面独具特色：首先它会对你的代码进行别�
   的作为普通数据的诊断。
 - 词法分析器为 IDE 以及 过程宏 保留有全保真度的信息。
 - 解析器 [将从词法分析器中得到的token序列转化为抽象语法树（AST）][parser]。它使用递归下降（自上而下）的方式来进行语法解析。
-  解析器的 crate 入口为`rustc_parse::parser::item`中的`Parser::parse_crate_mod()`以及`Parser::parse_mod()`函数。
+  解析器的 crate 入为`rustc_parse::parser::item`中的`Parser::parse_crate_mod()`以及`Parser::parse_mod()`函数。
   外部模块解析入口为`rustc_expand::module::parse_external_mod`。
   以及宏解析入口为[`Parser::parse_nonterminal()`][parse_nonterminal]。
 - 解析经由一系列 `Parser` 工具函数执行，包括`fn bump`，`fn check`，`fn eat`，`fn expect`，`fn look_ahead`。
@@ -42,11 +42,11 @@ rust的编译器在两方面独具特色：首先它会对你的代码进行别�
   尝试恢复、解析Rust语法的一个超集。
 - `rustc_ast::ast::{Crate, Mod, Expr, Pat, ...}` AST节点从解析器中被返回。
 - 我们接下来拿到AST并且[将其转化为高级中间标识（HIR）][hir]。这是一种编译器友好的AST表示方法。
-  这包括到很多如循环、`async fn`之类的去语法糖的东西。
+  这包括到很多如循环、`async fn`之类的解糖化的东西。
 - 我们使用 HIR 来进行[类型推导]。 这是对于一个表达式，自动检测其类型的过程。
 - **TODO：也许在这里还有其他事情被完成了？我认为初始化类型检查在这里进行了？以及 trait 解析？**
 - HIR之后 [被降低为中级中间标识（MIR）][mir]。
-  - 同时，我们构造 THIR ，THIR是去更多语法糖的的 HIR。THIR被用于模式和详尽性检验。
+  - 同时，我们构造 THIR ，THIR是更解糖化的 HIR。THIR被用于模式和详尽性检验。
     同时，它相较于 HIR 更容易被转化为MIR。
 - MIR被用于[借用检查]。
 - 我们（想要）[在 MIR 上做许多优化][mir-opt]因为它仍然是通用的，
@@ -107,49 +107,35 @@ rust的编译器在两方面独具特色：首先它会对你的代码进行别�
 
 总之，当你阅读指南的接下来的部分的时候，好好记住这些事。他们将通常会指引我们作出选择。
 
-### Intermediate representations
+### 中间形式表示
 
-As with most compilers, `rustc` uses some intermediate representations (IRs) to
-facilitate computations. In general, working directly with the source code is
-extremely inconvenient and error-prone. Source code is designed to be human-friendly while at
-the same time being unambiguous, but it's less convenient for doing something
-like, say, type checking.
+和大多数编译器一样，`rustc`使用了某种中间表示（IRs）来简化计算。通常，
+直接用源代码来进行我们的工作是极度不方便并且容易出错的。源代码通常被设计的对人类友好，有复意的，
+但是当做一些工作，比如类型检查的时候会较为不方便。
 
-Instead most compilers, including `rustc`, build some sort of IR out of the
-source code which is easier to analyze. `rustc` has a few IRs, each optimized
-for different purposes:
+因此大多数编译器，包括`rustc`，根据源代码创建某种便于分析的 IR 。`rust` 有一些 IRs，
+其各自根据不同的目的做了优化：
 
-- Token stream: the lexer produces a stream of tokens directly from the source
-  code. This stream of tokens is easier for the parser to deal with than raw
-  text.
-- Abstract Syntax Tree (AST): the abstract syntax tree is built from the stream
-  of tokens produced by the lexer. It represents
-  pretty much exactly what the user wrote. It helps to do some syntactic sanity
-  checking (e.g. checking that a type is expected where the user wrote one).
-- High-level IR (HIR): This is a sort of desugared AST. It's still close
-  to what the user wrote syntactically, but it includes some implicit things
-  such as some elided lifetimes, etc. This IR is amenable to type checking.
-- Typed HIR (THIR): This is an intermediate between HIR and MIR, and used to be called
-  High-level Abstract IR (HAIR). It is like the HIR but it is fully typed and a bit
-  more desugared (e.g. method calls and implicit dereferences are made fully explicit).
-  Moreover, it is easier to lower to MIR from THIR than from HIR.
-- Middle-level IR (MIR): This IR is basically a Control-Flow Graph (CFG). A CFG
-  is a type of diagram that shows the basic blocks of a program and how control
-  flow can go between them. Likewise, MIR also has a bunch of basic blocks with
-  simple typed statements inside them (e.g. assignment, simple computations,
-  etc) and control flow edges to other basic blocks (e.g., calls, dropping
-  values). MIR is used for borrow checking and other
-  important dataflow-based checks, such as checking for uninitialized values.
-  It is also used for a series of optimizations and for constant evaluation (via
-  MIRI). Because MIR is still generic, we can do a lot of analyses here more
-  efficiently than after monomorphization.
-- LLVM IR: This is the standard form of all input to the LLVM compiler. LLVM IR
-  is a sort of typed assembly language with lots of annotations. It's
-  a standard format that is used by all compilers that use LLVM (e.g. the clang
-  C compiler also outputs LLVM IR). LLVM IR is designed to be easy for other
-  compilers to emit and also rich enough for LLVM to run a bunch of
-  optimizations on it.
+- Token 序列：词法分析器根据源代码直接生成了一个 token 序列。这个 token 序列相较于原始文本
+  更便于解析器处理。
+- 抽象语法树（AST）：抽象语法树根据词法分析器生成的 token 序列创建。它几乎表示的就是用户所写的。
+  它帮助进行句法健全性检查（比如检查用户是否在正确的位置写了所期望的类型）。
+- 高级 IR（HIR）：它是一些解糖的 AST。从句法的角度上，它仍然接近于用户所写的内容，
+  但是它包含了一些诸如省略了的生命周期之类的信息。这种 IR 可以被用于类型检查。
+- 类型化的 HIR（THIR）：这是介于 HIR 与 MIR 之间的中间形式，曾被称为高级抽象 IR （HAIR）。
+  它类似于 HIR 但是它完整地类型化了并且稍微更加地解糖化（比如方法调用以及隐式解引用在这里被完全地显式化）。
+  此外，相较于HIR，THIR更容易降低化到 MIR。
+- 中级 IR（MIR）：这种 IR 基本属于控制流程图（CFG）。控制流程图是一种展示程序基础块以及控制流是如何在其间流通的图表。
+  同时，MIR 也有一些带有简单类型化语句的基础块（比如赋值语句、简单计算语句等等）以及链接其他基础块的控制流边
+  （比如调用语句、丢弃值等等）。MIR 被用于借用检查和其他重要的基于数据流的检查，比如检查未初始化的值。
+  它同样被用来做一系列优化以及常值评估（通过 MIRI）。因为 MIR 仍然是普通形式，比起在单态化之后我们在这里可以做更多分析。
+- LLVM IR：这是 LLVM 编译器所有输入的标准形式。LLVM IR 是一些带有许多注解的类型化的汇编语言。
+  它是所有使用 LLVM 的编译器的标准格式（比如 C 编译器 clang 同样输出 LLVM IR）。
 
+另一件要注意的事是，许多在编译器中的值被 _驻留_ 了。这是一种性能和内存优化手段，
+我们将值收集到一个特殊的被称作 _arena_ 的收集器中。之后，我们将引用逐个对应到 arena 中收集的值上。
+这使得我们可以保证相同的值（比如你程序中的类型）只被收集一次并且可以廉价地使用指针进行比较。
+许多内部表示都被驻留了。
 One other thing to note is that many values in the compiler are _interned_.
 This is a performance and memory optimization in which we allocate the values
 in a special allocator called an _arena_. Then, we pass around references to
