@@ -136,30 +136,17 @@ rust的编译器在两方面独具特色：首先它会对你的代码进行别�
 我们将值收集到一个特殊的被称作 _arena_ 的收集器中。之后，我们将引用逐个对应到 arena 中收集的值上。
 这使得我们可以保证相同的值（比如你程序中的类型）只被收集一次并且可以廉价地使用指针进行比较。
 许多内部表示都被驻留了。
-One other thing to note is that many values in the compiler are _interned_.
-This is a performance and memory optimization in which we allocate the values
-in a special allocator called an _arena_. Then, we pass around references to
-the values allocated in the arena. This allows us to make sure that identical
-values (e.g. types in your program) are only allocated once and can be compared
-cheaply by comparing pointers. Many of the intermediate representations are
-interned.
 
-### Queries
+### 查询
 
-The first big implementation choice is the _query_ system. The rust compiler
-uses a query system which is unlike most textbook compilers, which are
-organized as a series of passes over the code that execute sequentially. The
-compiler does this to make incremental compilation possible -- that is, if the
-user makes a change to their program and recompiles, we want to do as little
-redundant work as possible to produce the new binary.
+第一个主要的选择是 _查询_ 系统。rust 编译器使用了一种不同于大多数书本上的所写编译器的查询系统，
+后者是按顺序执行的一系列代码传递组织的。而 rust 编译器这样做是为了能够做到增量编译 ── 即，
+当用户对其程序作出修改并且重新编译，我们希望尽可能少地做（与上一次编译所做的）相重复的工作来创建新的二进制文件。
 
-In `rustc`, all the major steps above are organized as a bunch of queries that
-call each other. For example, there is a query to ask for the type of something
-and another to ask for the optimized MIR of a function. These
-queries can call each other and are all tracked through the query system.
-The results of the queries are cached on disk so that we can tell which
-queries' results changed from the last compilation and only redo those. This is
-how incremental compilation works.
+在`rustc`中，所有以上这些主要步骤被组织为互相调用的一些查询。举个例子。假如有一条查询负责询问某个东西的类型，
+而另一条查询负责询问某个函数的优化后的 MIR。这些查询可以相互调用并且由查询系统所跟踪。
+查询的角果被缓存于硬盘上，这样我们就可以分辨相较于上次编译，哪些查询的结果改变了，并且仅重做这些查询。
+这就是增量编译是如何工作的。
 
 In principle, for the query-fied steps, we do each of the above for each item
 individually. For example, we will take the HIR for a function and use queries
