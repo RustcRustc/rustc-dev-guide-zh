@@ -207,6 +207,34 @@
 </li>
 </ol>
 <h1><a class="header" href="#关于" id="关于">关于</a></h1>
+<p>本指南旨在记录rustc（Rust编译器）的工作方式，并帮助新的开发者参与到rustc的开发中来。</p>
+<p>本指南分为六个部分:</p>
+<ol>
+<li><a href="./getting-started.html">构建和调试 <code>rustc</code></a>: 包含有关构建，调试，性能分析等方面的有用信息，无论您以何种方式进行贡献。</li>
+<li><a href="./compiler-team.html">为 <code>rustc</code>做贡献</a>: 包含有关贡献代码的步骤，稳定功能等方面有用的信息，无论您以何种方式进行贡献。</li>
+<li><a href="./part-2-intro.html">编译器架构概要</a>: 讨论编译器的高级架构和编译过程的各个阶段。</li>
+<li><a href="./part-3-intro.html">源码表示</a>: 描述了获取用户的代码，并将其转换为编译器可以使用的各种形式的过程。</li>
+<li><a href="./part-4-intro.html">静态分析</a>: 讨论编译器如何分析代码，从而能够检查代码的各种属性并告知编译过程的后续阶段（例如，类型检查）。</li>
+<li><a href="./part-5-intro.html">从MIR到二进制</a>: 如何连接生成的可执行机器码。</li>
+<li><a href="./appendix/background.html">附录</a>: 在本指南的结尾提供了一些有关的参考信息，如词汇表、推荐书目等。</li>
+</ol>
+<h3><a class="header" href="#持续更新" id="持续更新">持续更新</a></h3>
+<p>请记住，这 <code>rustc</code> 是一种真正的生产质量管理工具，由大量的贡献者不断进行研究贡献。因此，它有相当一部分代码库变更和技术上的欠缺。此外，本指南中讨论的许多想法都是尚未完全实现的理想化设计。所有这些使本指南在所有方面都保持最新，这非常困难！</p>
+<p>该指南本身当然也是开源的，可以在<a href="https://github.com/rust-lang/rustc-dev-guide/">GitHub存储库</a>中找到这些源(译者注: 这里的Github存储库为此文档的英文原文链接)。
+如果您在指南中发现任何错误，请提出相关问题，甚至更好的是，打开带有更正的PR！</p>
+<p>如果您想要为本指南(译者注: 指英文版)作出帮助，请参阅本指南中。
+<a href="contributing.html#contributing-to-rustc-dev-guide">有关编写文档的相应小节</a>.</p>
+<blockquote>
+<p>“‘All conditioned things are impermanent’ — when one sees this with wisdom, one turns away from
+suffering.” <em>The Dhammapada, verse 277</em></p>
+</blockquote>
+<h2><a class="header" href="#其他查找信息的网站" id="其他查找信息的网站">其他查找信息的网站</a></h2>
+<p>以下站点可能对你有所帮助：</p>
+<ul>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/">rustc API docs</a> -- 编译器的rustdoc文档。</li>
+<li><a href="https://forge.rust-lang.org/">Forge</a> -- 包含有关Rust的补充文档。</li>
+<li><a href="https://github.com/rust-lang/compiler-team/">compiler-team</a> -- rust编译器团队的主页，描述了开发的过程，活动工作组，团队日历等。</li>
+</ul>
 <h1><a class="header" href="#如何构建并运行编译器" id="如何构建并运行编译器">如何构建并运行编译器</a></h1>
 <p>编译器是使用 <code>x.py</code> 工具进行构建。需要安装Python才能运行它。在此之前，如果您打算修改 <code>rustc</code> 的代码，则需要调整编译器的配置。默认配置面向的是编译器用户而非开发人员。有关如何安装 Python 和其他依赖，请参阅<a href="building/./prerequisites.html">下一章</a>。 </p>
 <h2><a class="header" href="#获取源代码" id="获取源代码">获取源代码</a></h2>
@@ -375,7 +403,271 @@ LLVM version: 11.0
 <h1><a class="header" href="#adding-a-new-target" id="adding-a-new-target">Adding a new target</a></h1>
 <h1><a class="header" href="#the-compiler-testing-framework" id="the-compiler-testing-framework">The compiler testing framework</a></h1>
 <h1><a class="header" href="#running-tests" id="running-tests">Running tests</a></h1>
-<h1><a class="header" href="#adding-new-tests" id="adding-new-tests">Adding new tests</a></h1>
+<h1><a class="header" href="#添加新测试" id="添加新测试">添加新测试</a></h1>
+<!-- toc -->
+<p><strong>总体而言，我们希望每个修复rustc错误的PR都能够有一些相应的回归测试</strong> 。这些测试在修复之前是错误的但是在PR之后应该是通过的。这些测试能有效的防止我们重复过去的错误。</p>
+<p>为了添加新测试，通常要做的第一件事是创建一个文件，往往是Rust源文件。测试文件有特定的结构：</p>
+<ul>
+<li>它们应该包含一些<a href="tests/adding.html#explanatory_comment">解释测试内容的注释</a>;</li>
+<li>接下来，它们应该有一个或多个<a href="tests/adding.html#header_commands">头部命令</a>，这些头部命令是能够让测试解释器知道如何解释特殊的注释，。</li>
+<li>最后，它们应该有Rust源码。源码可能包含不同的<a href="tests/adding.html#error_annotation">错误注释</a>，这些错误指示预期的编译错误或警告。</li>
+</ul>
+<p>根据测试套件的不同，可能还其它一些需要注意的细节：</p>
+<ul>
+<li>对于<a href="tests/adding.html#ui"><code>ui</code>测试套件</a>，您需要生成参考输出文件。</li>
+</ul>
+<h2><a class="header" href="#我应该添加哪种测试" id="我应该添加哪种测试">我应该添加哪种测试</a></h2>
+<p>知道该使用哪种测试是十分困难的。这里有一些粗略的启发：</p>
+<ul>
+<li>一些测试特殊的需求
+<ul>
+<li>需要运行gdb或者lldb?使用<code>debuginfo</code>测试套件</li>
+<li>需要检查LLVM IR或者MIR IR?使用<code>codegen</code>或者<code>mir-opt</code>测试套件</li>
+<li>需要运行rustdoc?首选<code>rustdoc</code>或者<code>rustdoc-ui</code>测试，有时，您也需要<code>rustc-js</code></li>
+<li>需要以某种方式检查生成的二进制文件？请使用<code>use-make</code></li>
+</ul>
+</li>
+<li>库测试应该放在<code>library/${crate}/tests</code>中(其中的<code>${crate}</code>通常是<code>core</code>，<code>alloc</code>，<code>std</code>)。库测试应该包括：
+<ul>
+<li>API是否正常运行，包括接受各种类型或者具有某些运行时行为的测试</li>
+<li>是否存在任何与测试不相关的编译器警告的测试</li>
+<li>当使用一个API时给出的错误与它真正的错误无关时的测试。这些测试在代码块中应该有一个<a href="tests/%60EOXXX%60">错误编号</a>，用于确保它是正确的错误信息。</li>
+</ul>
+</li>
+<li>对于剩余的大多数，首选<a href="tests/adding.html#ui"><code>ui</code>（或者<code>ui-fulldeps</code>）测试</a>
+<ul>
+<li><a href="tests/adding.html#ui"><code>ui</code></a>测试同时包含<code>run-pass</code>，<code>compile-fail</code>，和<code>parse=fail</code>测试</li>
+<li>在警告或错误的情况下，<code>ui</code>测试会捕获全部输出，这使得评审变得更容易，同时也有助于防止输出中的&quot;隐藏&quot;回归</li>
+</ul>
+</li>
+</ul>
+<h2><a class="header" href="#命名您的测试" id="命名您的测试">命名您的测试</a></h2>
+<p>传统上，对于测试名字，我们并没有太多的结构。并且，在很长一段时间中，rustc测试运行程序不支持子目录(现在可以了)，所以测试套件譬如<a href="https://github.com/rust-lang/rust/tree/master/src/test/ui/"><code>src/test/ui</code></a>中有很多文件。这并不是一个理想的设置。</p>
+<p>对于回归测试-基本上，一些随机的来自于互联网上的代码片段-我们经常用问题（issue）加上简短的说明来命名这些测试。理想情况下，应该将测试添加到目录中，这样能够帮助我们确定哪段代码正在被测试(例如<code>src/test/ui/borrowck/issue-54597-reject-move-out-of-borrow-via-pat.rs</code>)如果您已经尝试过但是找不到更相关的地方，这个测试可以被添加到<code>src/test/ui/issues/</code>。同样，<strong>请在某处添加上问题编号(issue numbeer)</strong>。但是，请尽量避免把您的测试放在那，因为这样会使目录中的测试过多，造成语义组织不佳。
+当在编写一个新特性时候时，<strong>请创建一个子目录用于存放您的测试</strong>。例如，如果您要实现RFC1234(&quot;Widgets&quot;)，那么最好将测试放在类似<code>src/test/ui/rfc1234-widgets</code>的目录。</p>
+<p>在其它情况下，可能已经存在合适的目录。(被正确使用的目录结构实际上是一个活跃的讨论区)</p>
+<p><a name="explanatory_comment"></a></p>
+<h2><a class="header" href="#注释说明测试内容" id="注释说明测试内容">注释说明测试内容</a></h2>
+<p>当您在创建测试文件时，请在文件的开头添加总结测试要点的注释。注释应该突出显示哪一部分测试更为重要，以及这个测试正在解决什么问题。引用问题编号通常非常有帮助。</p>
+<p>该注释不必过于广泛，类似&quot;Regression test for #18060： match arms were matching in the wrong order.&quot;的注释就已经足够了。</p>
+<p>以后当您的测试崩溃时，这些注释对其他人非常有用，因为它们通常已经突出显示了问题所在。当出于某些原因测试需要重构时，这些注释也同样有用，因为它能让其他人知道哪一部分的测试是重要的(通常，必须重写测试，因为它不再测试它曾经被用于测试的内容，所以知道测试曾经的含义是十分有用的)</p>
+<p><a name="header_commands"></a></p>
+<h2><a class="header" href="#头部指令-配置rustc" id="头部指令-配置rustc">头部指令： 配置rustc</a></h2>
+<p>头部指令是一种特殊的注释，它让测试运行程序知道如何解释。在测试中，它们必须出现在Rust源代码之前。它们通常被放在段注释后，这些注释用来解释本测试的关键点。例如，这个测试使用了<code>//compile-flags</code>指令，该指令在编译测试时给rustc指定了自定义的标志。</p>
+<pre><code class="language-rust，ignore">// Test the behavior of `0 - 1` when overflow checks are disabled.
+
+// compile-flags： -C overflow-checks=off
+
+fn main() {
+    let x = 0 - 1;
+    ...
+}
+</code></pre>
+<h3><a class="header" href="#忽略测试" id="忽略测试">忽略测试</a></h3>
+<p>下列是用于在某些情况下忽略测试，这意味着测试不会被编译或者运行</p>
+<ul>
+<li><code>ignore-X</code> 其中X是会忽略相应测试的目标细节或阶段(见下文)</li>
+<li><code>only-X</code>和<code>ignore-X</code>相似，不过<em>只</em>会在那个目标或阶段下运行测试</li>
+<li><code>ignore-pretty</code>将不会编译打印美化的测试(这样做是为了测试打印美化器，但它并不总是有效)</li>
+<li><code>ignore-test</code>总是忽略测试</li>
+<li><code>ignore-lldb</code>和<code>ignore-gdb</code>会跳过调试器的调试信息</li>
+<li><code>ignore-gdb-version</code>当使用某些gdb版本时，可以使用它来忽略测试</li>
+</ul>
+<p>一些关于<code>ignore-X</code>中<code>X</code>的例子：</p>
+<ul>
+<li>架构： <code>aarch64</code>， <code>arm</code>， <code>asmjs</code>， <code>mips</code>， <code>wasm32</code>， <code>x86_64</code>，<code>x86</code>， ...</li>
+<li>OS： <code>android</code>， <code>emscripten</code>， <code>freebsd</code>， <code>ios</code>， <code>linux</code>， <code>macos</code>， <code>windows</code>， ...</li>
+<li>环境(即目标三元组(&quot;target-triple&quot;)的第四个词)：<code>gnu</code>， <code>msvc</code>， <code>musl</code>.</li>
+<li>指针宽度： <code>32bit</code>， <code>64bit</code>.</li>
+<li>阶段： <code>stage0</code>， <code>stage1</code>， <code>stage2</code>.</li>
+<li>当交叉编译时： <code>compare-mode-nll</code></li>
+<li>当使用远程测试时： <code>remote</code></li>
+<li>当启用调试断言时： <code>debug</code></li>
+<li>当测试特定的调试器时：  <code>cdb</code>， <code>gdb</code>， <code>lldb</code></li>
+<li>特定比较模式时： <code>compare-mode-nll</code>， <code>compare-mode-polonius</code></li>
+</ul>
+<h3><a class="header" href="#其它头部指令" id="其它头部指令">其它头部指令</a></h3>
+<p>这是一份关于其它头部指令的列表。该表并不详尽，您通常可以通过浏览来自compiletest源的[<code>header.rs</code>]中的<code>TestProps</code>找到头部命令。</p>
+<ul>
+<li><code>run-rustfix</code> ，该命令是用于UI测试，表示测试产生结构化建议。测试编写者应该创建一个<code>.fixed</code>文件，其中包含应用了建议的源码。当运行测试时，compiletest 首先检查正确的lint/warning是否产生。然后，它应用建议并且与<code>.fixed</code>(两者必须匹配)比较。最后，fixed源码被编译，并且此次编译必须成功。<code>.fixed</code>文件可以通过<code>bless</code>选项自动生成，在<a href="tests/bless">本节</a>进行了介绍</li>
+<li><code>min-gdb-version</code>指定了本测试所需的最低gdb版本。</li>
+<li><code>min-lldb-version</code>指定了本测试所需的最低lldb版本。</li>
+<li><code>no-system-llvm</code>，如果使用系统llvm，该命令会导致测试被忽略</li>
+<li><code>min-system-llvm-version</code>指定最低的系统llvm版本;如果系统llvm被使用并且未达到所需的最低版本，那么本测试会被忽略。当一个llvm功能被反向移植到rust-llvm时，这条命令十分有效。</li>
+<li><code>ignore-llvm-version</code>，当特定的LLVM版本被使用时，该命令可以用于跳过测试。它需要一个或两个参数。第一个参数是第一个被忽略的版本，如果没有第二个参数，那么后续版本都会被忽略;否则，第二个参数就是被忽略的最后一个版本。</li>
+<li><code>build-pass</code>适用于UI测试，该命令表示测试应该成功编译和链接，与此相反的是默认情况下测试应该会出错。</li>
+<li><code>compile-flags</code>将额外的命令行参数传递给编译器，例如<code>compile-flags -g</code>会强制启用debuginfo</li>
+<li><code>edition</code>控制测试应该使用的版本(默认为2014)。用法示例<code>// edition：2018</code>。</li>
+<li><code>should-fail</code>表示测试应该失败;被用于元测试(&quot;meta testing&quot;)，该测试是我们测试compiletest程序本身是否能够在适当的情况下产生错误。在格式美化测试中该头部命令会被忽略。</li>
+<li><code>gate-test-X</code>中的<code>X</code>是一个特性，该命令把测试标记为对于特性X的&quot;门控测试&quot;(&quot;gate test&quot;)。此类测试应该确保当尝试使用门控功能而没有正确的<code>#![feature(X)]</code>标签时，编译器会发生错误。每个不稳定的语言特性都需要一个门测试。</li>
+<li><code>needs-profiler-support</code>－需要profiler运行时，例如，rustc的<code>config.toml</code>中的<code>profiler=true</code>。</li>
+<li><code>needs-sanitizer-support</code>－需要sanitizer运行时，例如，rustc的<code>config.toml</code>中的<code>sanitizers = true</code>。</li>
+<li><code>needs-sanitizer-{address，leak，memory，thread}</code>-表示该测试需要一个目标分别支持AddressSanitizer， LeakSanitizer，MemorySanitizer 或者 ThreadSanitizer。</li>
+<li><code>error-pattern</code>像<code>ERROR</code>注释一样检查诊断，而不指定错误行。当错误没有给出任何范围时，这个命令十分有用。</li>
+</ul>
+<p>[<code>header.rs</code>]： https：//github.com/rust-lang/rust/tree/master/src/tools/compiletest/src/header.rs
+[bless]： ./running.md#editing-and-updating-the-reference-files</p>
+<p><a name="error_annotations"></a></p>
+<h3><a class="header" href="#错误注释示例" id="错误注释示例">错误注释示例</a></h3>
+<p>这是一些UI测试源上不同的错误注释示例。</p>
+<h4><a class="header" href="#置于错误行上" id="置于错误行上">置于错误行上</a></h4>
+<p>使用<code>//~ERROR</code>语法</p>
+<pre><code class="language-rust，ignore">fn main() {
+    let x = (1， 2， 3);
+    match x {
+        (_a， _x @ ..) =&gt; {} //~ ERROR `_x @` is not allowed in a tuple
+        _ =&gt; {}
+    }
+}
+</code></pre>
+<h4><a class="header" href="#置于错误行下" id="置于错误行下">置于错误行下</a></h4>
+<p>使用<code>//~^</code>语法，字符串中插入号(<code>^</code>)的数量表示上方的行数。在下面这个例子中，错误行在错误注释行的上四行位置，因此注释中有四个插入号。</p>
+<pre><code class="language-rust，ignore">fn main() {
+    let x = (1， 2， 3);
+    match x {
+        (_a， _x @ ..) =&gt; {}  // &lt;- the error is on this line
+        _ =&gt; {}
+    }
+}
+//~^^^^ ERROR `_x @` is not allowed in a tuple
+</code></pre>
+<h4><a class="header" href="#使用与上面错误注释行相同的错误行" id="使用与上面错误注释行相同的错误行">使用与上面错误注释行相同的错误行</a></h4>
+<p>使用<code>//~|</code>语法定义与上面错误注释行相同的错误行</p>
+<pre><code class="language-rust，ignore">struct Binder(i32， i32， i32);
+
+fn main() {
+    let x = Binder(1， 2， 3);
+    match x {
+        Binder(_a， _x @ ..) =&gt; {}  // &lt;- the error is on this line
+        _ =&gt; {}
+    }
+}
+//~^^^^ ERROR `_x @` is not allowed in a tuple struct
+//~| ERROR this pattern has 1 field， but the corresponding tuple struct has 3 fields [E0023]
+</code></pre>
+<h4><a class="header" href="#无法指定错误行时" id="无法指定错误行时">无法指定错误行时</a></h4>
+<p>让我们思考一下这个测试</p>
+<pre><code class="language-rust，ignore">fn main() {
+    let a: *const [_] = &amp;[1， 2， 3];
+    unsafe {
+        let _b = (*a)[3];
+    }
+}
+</code></pre>
+<p>我们想要确保它显示&quot;超出索引范围&quot;(&quot;index out of bounds&quot;)，但是我们不能使用<code>ERROR</code>注释，因为这个错误没有范围。那么是时候使用<code>error-pattern</code>：</p>
+<pre><code class="language-rust，ignore">// error-pattern: index out of bounds
+fn main() {
+    let a: *const [_] = &amp;[1， 2， 3];
+    unsafe {
+        let _b = (*a)[3];
+    }
+}
+</code></pre>
+<p>但是对于严格测试，请尽量使用<code>ERROR</code>注释。</p>
+<h4><a class="header" href="#错误等级" id="错误等级">错误等级</a></h4>
+<p>您可以拥有的错误等级是：</p>
+<ol>
+<li><code>ERROR</code></li>
+<li><code>WARNING</code></li>
+<li><code>NOTE</code></li>
+<li><code>HELP</code> and <code>SUGGESTION</code>*</li>
+</ol>
+<p>* <strong>注意</strong>： <code>SUGGESTION</code>必须紧随<code>HELP</code>之后</p>
+<h2><a class="header" href="#版本" id="版本">版本</a></h2>
+<p>某些测试类支持&quot;版本&quot;(&quot;revision&quot;)(截至本文撰写之时，这包括编译失败，运行失败和增量测试，虽然增量测试有些差异)。版本允许将一个测试文件用于多个测试。这通过在文件顶部添加一个特殊的头部来完成：</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// revisions: foo bar baz
+<span class="boring">}
+</span></code></pre></pre>
+<p>这会导致测试被编译(和测试)三次，一次使用<code>--cfg foo</code>，一次使用<code>--cfg bar</code>，一次使用<code>--cfg baz</code>。因此您可以在测试中使用<code>#[cfg(foo)]</code>等来调整每个结果。</p>
+<p>您也可以将头部和期望的错误信息来自定义为特定的修订。为此，您需要在<code>//</code>注释后添加<code>[foo]</code>(或者<code>bar</code>，<code>baz</code>等)，如下所示</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// A flag to pass in only for cfg `foo`:
+//[foo]compile-flags: -Z verbose
+
+#[cfg(foo)]
+fn test_foo() {
+    let x: usize = 32_u32; //[foo]~ ERROR mismatched types
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>请注意，并非所有的头部在被自定义为版本时都有意义。例如，<code>ignore-test</code>头部(和所有的<code>ignore</code>头部)目前只适用于整个测试而不适用于特定的版本。当被自定义为版本时，唯一真正起作用的头部只有错误模式(error patterns)和编译器标志(compiler flags)。</p>
+<p><a name="ui"></a></p>
+<h2><a class="header" href="#ui测试指南" id="ui测试指南">UI测试指南</a></h2>
+<p>UI测试旨在抓取编译器完整的输出，这样我们可以测试可以测试表现的各个方面。它们通过编译文件(例如<a href="tests/hw-main"><code>ui/hello_world/main.rs</code></a>)，捕获输出，然后进行一些标准化(参见下文)。然后将标准化的结果与名为<code>ui/hello_world/main.stderr</code>和<code>ui/hello_world/main.stdout</code>的参考文件进行比较。如果其中任意一文件不存在，那么输出必须为空(实际上是<a href="https://github.com/rust-lang/rust/blob/master/src/test/ui/hello_world/">该特定测试</a>的实例)。如果测试运行失败，我们将打印出当前输出，但是输出也被保存在<code>build/&lt;target-triple&gt;/test/ui/hello_world/main.stdout</code>(这个路径会被当作测试失败信息的一部分而打印出来)，这样你就可以通过运行<code>diff</code>等命令来比较。</p>
+<p>现在我们有大量的UI测试并且一些目录中的条目过多。这是一个问题，因为它对editor/IDE是不友好的并且GitHub UI也不会显示超过1000个的目录。为了解决这个问题并组织语义结构，我们有一个整洁检查(tidy check)，用以确保条目数小于1000，我们为每个目录设置了不同的上限。所以，请避免将新测试放在这，并且尝试去寻找更相关的位置。例如，你的测试和闭包相关，你应该把它放在<code>src/test/ui/closures</code>。如果你不确定哪里最佳的位置.添加到<code>src/test/ui/issues/</code>也是可以的。当到达上限时，你可以通过调整<a href="https://github.com/rust-lang/rust/blob/master/src/tools/tidy/src/ui_tests.rs">这</a>来增加上限。</p>
+<h3><a class="header" href="#不会导致编译错误的测试" id="不会导致编译错误的测试">不会导致编译错误的测试</a></h3>
+<p>默认情况下，预期UI测试<strong>不会编译</strong>(在这种情况下，应该至少包含一个<code>//~ERROR</code>注释)。但是，您也可以在期望编译成功的地方进行UI测试，甚至还可以运行生成的程序。只需要添加任意下列<a href="tests/adding.html#header_commands">头部命令</a>：</p>
+<ul>
+<li><code>// check-pass</code>-编译应该成功，但是跳过代码生成(它的代价是昂贵的，在大部分情况下不应该失败)</li>
+<li><code>// build-pass</code>-编译和链接应该成功但是不运行生成的二进制文件</li>
+<li><code>// run-pass</code> -编译应该成功并且我们应该运行生成的二进制文件</li>
+</ul>
+<h3><a class="header" href="#标准化" id="标准化">标准化</a></h3>
+<p>编译器的输出被标准化以消除不同平台输出的差异，主要和文件名相关。</p>
+<p>下面的字符串会被替换成相应的值：</p>
+<ul>
+<li><code>$DIR</code>：被定义为测试的目录
+<ul>
+<li>例如：<code>/path/to/rust/src/test/ui/error-codes</code></li>
+</ul>
+</li>
+<li><code>$SRC_DIR</code>：源码根目录
+<ul>
+<li>例如：<code>/path/to/rust/src</code></li>
+</ul>
+</li>
+<li><code>$TEST_BUILD_DIR</code>：测试输出所在的基本目录
+<ul>
+<li>例如：<code>/path/to/rust/build/x86_64-unknown-linux-gnu/test/ui</code></li>
+</ul>
+</li>
+</ul>
+<p>此外，会进行以下更改：</p>
+<ul>
+<li>
+<p><code>$SRC_DIR</code>中的行号和列号被<code>LL:CC</code>代替。例如，<code>/path/to/rust/library/core/src/clone.rs:122:8</code> 被替代为<code>$SRC_DIR/core/src/clone.rs:LL:COL</code>。</p>
+<p>注意：指向测试的<code>--&gt;</code>行的行号和列号是<em>未</em>规范的，并保持原样。这确保编译器继续指向正确的位置并且保持stderr文件的可读性。理想情况下，所有行和列的信息都被保留，但是源的小变化会造成巨大的差异，更为频繁的合并冲突和测试错误。另请参见下面的<code>-Z ui-testing</code>，它适用于附加的行号规范化。</p>
+</li>
+<li>
+<p><code>\t</code>被替换为实际的制表符</p>
+</li>
+<li>
+<p>错误行注释例如<code>// ~Error some messgage</code>被移除</p>
+</li>
+<li>
+<p>反斜杠（<code>\</code>）在路径内转换为正斜杠（<code>/</code>）（使用启发式）。这有助于规范Windows样式路径的差异。</p>
+</li>
+<li>
+<p>CRLF换行符被转换为LF。</p>
+</li>
+</ul>
+<p>此外，编译器使用<code>-Z ui-testing</code>标志运行，这导致编译器本身对诊断输出进行一些修改以使其更适合于UI测试。例如，它将匿名化输出中的行好(每行源代码前的行号会被替换为<code>LL</code>)。在极少数情况下，可以使用头部命令<code>// compile-flags: -Z ui-testing=no</code>来禁用此模式。</p>
+<p>有时，这些内置的规范化并不够。在这种情况下，你可以提供通过头部命令自定义的规范规则，例如</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// normalize-stdout-test: &quot;foo&quot; -&gt; &quot;bar&quot;
+// normalize-stderr-32bit: &quot;fn\(\) \(32 bits\)&quot; -&gt; &quot;fn\(\) \($$PTR bits\)&quot;
+// normalize-stderr-64bit: &quot;fn\(\) \(64 bits\)&quot; -&gt; &quot;fn\(\) \($$PTR bits\)&quot;
+<span class="boring">}
+</span></code></pre></pre>
+<p>这告诉测试，在32位平台上，只要编译器将<code>fn() (32 bits)</code>写入stderr时，都应该被标准化为读取<code>fn() ($PTR bits)</code>。64位同样如此。替换是由正则表达式完成，它使用由<code>regex</code>crate提供的默认正则风格。</p>
+<p>相应的参考文件将使用规范化的输出来测试32位和64位平台：</p>
+<pre><code class="language-text">...
+   |
+   = note: source type: fn() ($PTR bits)
+   = note: target type: u16 (16 bits)
+...
+</code></pre>
+<p>请参阅[<code>ui/transmute/main.rs</code>][mrs]和 [<code>main.stderr</code>][]了解具体的用法示例。
+[mrs]: https://github.com/rust-lang/rust/blob/master/src/test/ui/transmute/main.rs
+[<code>main.stderr</code>]: https://github.com/rust-lang/rust/blob/master/src/test/ui/transmute/main.stderr</p>
+<p>除了<code>normalize-stderr-32bit</code>和<code>-64bit</code>，在这里也可以使用 <a href="tests/adding.html#ignoring-tests"><code>ignore-X</code></a> 支持的任何目标信息或阶段(例如<code>normalize-stderr-windows</code> 或简单地使用<code>normalize-stderr-test</code> 进行无条件替代)</p>
 <h1><a class="header" href="#using-compiletest-commands-to-control-test-execution" id="using-compiletest-commands-to-control-test-execution">Using compiletest commands to control test execution</a></h1>
 <h1><a class="header" href="#debugging-the-compiler" id="debugging-the-compiler">Debugging the Compiler</a></h1>
 <h1><a class="header" href="#profiling-the-compiler" id="profiling-the-compiler">Profiling the compiler</a></h1>
@@ -474,7 +766,177 @@ LLVM version: 11.0
 <li>以及更多……</li>
 </ul>
 <h1><a class="header" href="#bootstrapping" id="bootstrapping">Bootstrapping</a></h1>
-<h1><a class="header" href="#queries-demand-driven-compilation" id="queries-demand-driven-compilation">Queries: demand-driven compilation</a></h1>
+<h1><a class="header" href="#查询-需求驱动的编译" id="查询-需求驱动的编译">查询: 需求驱动的编译</a></h1>
+<p>如<a href="./compiler-src.html">编译器高级概述</a>中所述，Rust编译器当前（2021年1月 <!-- date: 2021-01 -->）仍然正在从传统的“基于 pass”的编译过程过渡到“需求驱动”的编译过程。**编译器查询系统是我们新的需求驱动型编译过程的关键。**背后的想法很简单。 您可以使用各种查询来计算某一输入的相关信息 – 例如，有一个名为<code>type_of(def_id)</code>的查询，传入某项的 <a href="appendix/glossary.html#def-id">def-id</a> ，它将计算该项的类型并将其返回给您。</p>
+<p>查询执行是<strong>记忆化</strong>的 —— 因此，第一次调用查询时，它将进行实际的计算，但是下一次，结果将从哈希表中返回。
+此外，查询执行非常适合“<strong>增量计算</strong>”； 大致的想法是，当您执行查询时，<strong>可能</strong>会通过从磁盘加载存储的数据来将结果返回给您（这是一个单独的主题，我们将不在此处进一步讨论）。</p>
+<p>总体上我们希望最终整个编译器控制流将由查询驱动。由一个顶层的查询（&quot;compile&quot;）来驱动一个crate上的编译；这会依次要求这个crate的各种信息。例如：</p>
+<ul>
+<li>此 &quot;compile&quot; 查询可能需要获取代码生成单元列表（即需要由LLVM编译的模块）。</li>
+<li>但是计算代码生成单元列表将调用一些子查询，该子查询返回 Rust 源代码中定义的所有模块的列表。</li>
+<li>这些子查询会要求查询HIR。</li>
+<li>就这样越推越远，直到我们完成实际的 parsing。</li>
+</ul>
+<p>这一愿景尚未完全实现。尽管如此，编译器的大量代码（例如生成MIR）已经完全像这样工作了。</p>
+<h3><a class="header" href="#增量编译的详细说明" id="增量编译的详细说明">增量编译的详细说明</a></h3>
+<p><a href="queries/incremental-compilation-in-detail.html">增量编译的详细说明</a>一章提供了关于什么是查询及其工作方式的深入描述。
+如果您打算编写自己的查询，那么可以读一读这一章节。</p>
+<h3><a class="header" href="#调用查询" id="调用查询">调用查询</a></h3>
+<p>调用查询很简单。 <code>tcx</code>（“类型上下文”）为每个定义好的查询都提供了一种方法。 因此，例如，要调用<code>type_of</code>查询，只需执行以下操作：</p>
+<pre><code class="language-rust ignore">let ty = tcx.type_of(some_def_id);
+</code></pre>
+<h3><a class="header" href="#编译器如何执行查询" id="编译器如何执行查询">编译器如何执行查询</a></h3>
+<p>您可能想知道调用查询方法时会发生什么。
+答案是，对于每个查询，编译器都会将结果缓存——如果您的查询已经执行过，那么我们将简单地从缓存中复制上一次的返回值并将其返回（因此，您应尝试确保查询的返回类型可以低成本的克隆；如有必要，请使用<code>Rc</code>）。</p>
+<h4><a class="header" href="#providers" id="providers">Providers</a></h4>
+<p>但是，如果查询不在缓存中，则编译器将尝试找到合适的 <strong>provider</strong>。
+provider 是已定义并链接到编译器的某个函数，其包含用于计算查询结果的代码。</p>
+<p><strong>Provider是按crate定义的。</strong>
+编译器（至少在概念上）在内部维护每个 crate 的 provider 表。
+目前，实际上 provider 分为了两组：用于查询“<strong>本crate</strong>”的 provider（即正在编译的crate）和用于查询“<strong>外部crate</strong>”（即正在编译的crate的依赖） 的 provider。
+请注意，确定查询所在的crate的类型不是查询的<em>类型</em>，而是<em>键</em>。
+例如，当您调用 <code>tcx.type_of(def_id)</code> 时，它可以是本地查询，也可以是外部查询，
+这取决于<code>def_id</code>所指的crate（请参阅<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/query/keys/trait.Key.html"><code>self::keys::Key</code></a> trait 以获取有关其工作原理的更多信息）。</p>
+<p>Provider 始终具有相同的函数签名：</p>
+<pre><code class="language-rust ignore">fn provider&lt;'tcx&gt;(
+    tcx: TyCtxt&lt;'tcx&gt;,
+    key: QUERY_KEY,
+) -&gt; QUERY_RESULT {
+    ...
+}
+</code></pre>
+<p>Provider 接受两个参数：<code>tcx</code> 和查询键，并返回查询结果。</p>
+<h4><a class="header" href="#如何初始化-provider" id="如何初始化-provider">如何初始化 provider</a></h4>
+<p>创建 tcx 时，它的创建者会使用<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/query/struct.Providers.html"><code>Providers</code></a>结构为它提供provider。
+此结构是由此处的宏生成的，但基本上就是一大堆函数指针：</p>
+<pre><code class="language-rust ignore">struct Providers {
+    type_of: for&lt;'tcx&gt; fn(TyCtxt&lt;'tcx&gt;, DefId) -&gt; Ty&lt;'tcx&gt;,
+    ...
+}
+</code></pre>
+<p>目前，我们为本地 crate 和所有外部 crate 各提供一份该结构的副本，最终计划是为每个crate提供一份。</p>
+<p>这些 <code>Provider</code> 结构最终是由 <code>librustc_driver</code> 创建并填充的，它通过调用各种<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/hir/fn.provide.html"><code>provide</code></a>函数，将工作分配给其他<code>rustc_*</code> crate。这些函数看起来像这样：</p>
+<pre><code class="language-rust ignore">pub fn provide(providers: &amp;mut Providers) {
+    *providers = Providers {
+        type_of,
+        ..*providers
+    };
+}
+</code></pre>
+<p>也就是说，他们接收一个  <code>&amp;mut Providers</code>  并对其进行原地修改。
+通常我们使用上面的写法只是因为它看起来比较漂亮，但是您也可以 <code>providers.type_of = type_of</code>，这是等效的。
+（在这里，<code>type_of</code> 将是一个顶层函数，如我们之前看到的那样定义。）
+因此，如果我们想为其他查询添加 provider，比如向前面的 crate 添加一个 <code>fubar</code>，我们可以这样修改 <code>provide</code> 函数：</p>
+<pre><code class="language-rust ignore">pub fn provide(providers: &amp;mut Providers) {
+    *providers = Providers {
+        type_of,
+        fubar,
+        ..*providers
+    };
+}
+
+fn fubar&lt;'tcx&gt;(tcx: TyCtxt&lt;'tcx&gt;, key: DefId) -&gt; Fubar&lt;'tcx&gt; { ... }
+</code></pre>
+<p>注意：大多数 <code>rustc_*</code> crate仅提供 <strong>本crate provider</strong>。
+几乎所有的<strong>外部 provider</strong> 都会通过 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_metadata/index.html"><code>rustc_metadata</code> crate</a> 进行处理，后者会从 crate 元数据中加载信息。
+但是在某些情况下，某些crate可以既提供本地也提供外部crate查询，在这种情况下，他们通过<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_llvm/attributes/fn.provide_both.html"><code>provide_both</code></a> 定义了 <code>provide</code> 和 <code>provide_extern</code> 函数，供<code>rustc_driver</code> 调用。 </p>
+<h3><a class="header" href="#添加一种新的查询" id="添加一种新的查询">添加一种新的查询</a></h3>
+<p>假设您想添加一种新的查询，您该怎么做？
+定义查询分为两个步骤：</p>
+<ol>
+<li>首先，必须指定查询名称和参数； 然后，</li>
+<li>您必须在需要的地方提供查询提供程序。</li>
+</ol>
+<p>要指定查询名称和参数，您只需将条目添加到
+<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/query/index.html"><code>compiler/rustc_middle/src/query/mod.rs</code></a> 中的大型宏调用之中，类似于：</p>
+<pre><code class="language-rust ignore">rustc_queries! {
+    Other {
+        /// Records the type of every item.
+        query type_of(key: DefId) -&gt; Ty&lt;'tcx&gt; {
+            cache { key.is_local() }
+        }
+    }
+
+    ...
+}
+</code></pre>
+<p>查询分为几类（<code>Other</code>，<code>Codegn</code>，<code>TypeChecking</code>等）。
+每组包含一个或多个查询。 每个查询的定义都是这样分解的：</p>
+<pre><code class="language-rust ignore">query type_of(key: DefId) -&gt; Ty&lt;'tcx&gt; { ... }
+^^    ^^^^^^^      ^^^^^     ^^^^^^^^   ^^^
+|     |            |         |          |
+|     |            |         |          查询修饰符
+|     |            |         查询的结果类型
+|     |            查询的 key 的类型
+|     查询名称
+query 关键字
+</code></pre>
+<p>让我们一一介绍它们：</p>
+<ul>
+<li>
+<p><strong>query关键字：</strong> 表示查询定义的开始。</p>
+</li>
+<li>
+<p>**查询名称：**查询方法的名称（<code>tcx.type_of(..)</code>）。也用作生成的表示此查询的结构体的名称（<code>ty::queries::type_of</code>）。</p>
+</li>
+<li>
+<p>**查询的 key 的类型：**此查询的参数类型。此类型必须实现 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/query/keys/trait.Key.html"><code>ty::query::keys::Key</code></a> trait，该trait定义了如何将其映射到 crate 等等。</p>
+</li>
+<li>
+<p><strong>查询的结果类型：</strong> 此查询产生的类型。
+这种类型应该</p>
+<p>（a）不使用 <code>RefCell</code> 等内部可变性模式，并且
+（b）可以廉价地克隆。对于非平凡的数据类型，建议使用 Interning 方法或使用<code>Rc</code>或<code>Arc</code>。</p>
+<ul>
+<li>一个例外是<code>ty::steal::Steal</code>类型，该类型用于廉价地修改MIR。有关更多详细信息，请参见<code>Steal</code>的定义。不应该在不警告<code>@rust-lang/compiler</code>的情况下添加对<code>Steal</code>的新的使用。</li>
+</ul>
+</li>
+<li>
+<p><strong>查询修饰符：</strong> 用于自定义查询处理方式的各种标志和选项（主要用于<a href="queries/incremental-compilation-in-detail.html#query-modifiers">增量编译</a>）。</p>
+</li>
+</ul>
+<p>因此，要添加查询：</p>
+<ul>
+<li>使用上述格式在 <code>rustc_queries!</code> 中添加一个条目。</li>
+<li>通过修改适当的 <code>provide</code> 方法建立和 provider 的关联； 或根据需要添加一个新文件，并确保<code>rustc_driver</code> 会调用它。</li>
+</ul>
+<h4><a class="header" href="#查询结构体和查询描述" id="查询结构体和查询描述">查询结构体和查询描述</a></h4>
+<p>对于每种类型，<code>rustc_queries</code> 宏都会生成一个以查询名字命名的“查询结构体”。
+此结构体是描述查询的一种占位符。 每个这样的结构都要实现<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/query/trait.QueryConfig.html"><code>self::config::QueryConfig</code></a> trait，
+该 trait 上有该特定查询的 键/值 的关联类型。
+基本上，生成的代码如下所示：</p>
+<pre><code class="language-rust ignore">// Dummy struct representing a particular kind of query:
+pub struct type_of&lt;'tcx&gt; { data: PhantomData&lt;&amp;'tcx ()&gt; }
+
+impl&lt;'tcx&gt; QueryConfig for type_of&lt;'tcx&gt; {
+  type Key = DefId;
+  type Value = Ty&lt;'tcx&gt;;
+
+  const NAME: QueryName = QueryName::type_of;
+  const CATEGORY: ProfileCategory = ProfileCategory::Other;
+}
+</code></pre>
+<p>您可能希望实现一个额外的trait，称为 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_query_system/query/config/trait.QueryDescription.html"><code>self::config::QueryDescription</code></a>。
+这个 trait 在发生循环引用错误时会被使用，为查询提供一个“人类可读”的名称，以便我们可以探明循环引用发生的情况。
+如果查询键是 <code>DefId</code>，则可以不实现这个 trait，但是如果<em>不</em>实现它，则会得到一个相当普遍的错误（“processing <code>foo</code> ...”）。
+您可以将新的 impl 放入<code>config</code>模块中。 像这样：</p>
+<pre><code class="language-rust ignore">impl&lt;'tcx&gt; QueryDescription for queries::type_of&lt;'tcx&gt; {
+    fn describe(tcx: TyCtxt, key: DefId) -&gt; String {
+        format!(&quot;computing the type of `{}`&quot;, tcx.def_path_str(key))
+    }
+}
+</code></pre>
+<p>另一个选择是添加<code>desc</code>修饰符：</p>
+<pre><code class="language-rust ignore">rustc_queries! {
+    Other {
+        /// Records the type of every item.
+        query type_of(key: DefId) -&gt; Ty&lt;'tcx&gt; {
+            desc { |tcx| &quot;computing the type of `{}`&quot;, tcx.def_path_str(key) }
+        }
+    }
+}
+</code></pre>
+<p><code>rustc_queries</code> 宏会自动生成合适的 <code>impl</code>。</p>
 <h1><a class="header" href="#the-query-evaluation-model-in-detail" id="the-query-evaluation-model-in-detail">The Query Evaluation Model in Detail</a></h1>
 <h1><a class="header" href="#incremental-compilation" id="incremental-compilation">Incremental compilation</a></h1>
 <h1><a class="header" href="#incremental-compilation-in-detail" id="incremental-compilation-in-detail">Incremental compilation In Detail</a></h1>

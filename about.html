@@ -168,6 +168,34 @@
                 <div id="content" class="content">
                     <main>
                         <h1><a class="header" href="#关于" id="关于">关于</a></h1>
+<p>本指南旨在记录rustc（Rust编译器）的工作方式，并帮助新的开发者参与到rustc的开发中来。</p>
+<p>本指南分为六个部分:</p>
+<ol>
+<li><a href="./getting-started.html">构建和调试 <code>rustc</code></a>: 包含有关构建，调试，性能分析等方面的有用信息，无论您以何种方式进行贡献。</li>
+<li><a href="./compiler-team.html">为 <code>rustc</code>做贡献</a>: 包含有关贡献代码的步骤，稳定功能等方面有用的信息，无论您以何种方式进行贡献。</li>
+<li><a href="./part-2-intro.html">编译器架构概要</a>: 讨论编译器的高级架构和编译过程的各个阶段。</li>
+<li><a href="./part-3-intro.html">源码表示</a>: 描述了获取用户的代码，并将其转换为编译器可以使用的各种形式的过程。</li>
+<li><a href="./part-4-intro.html">静态分析</a>: 讨论编译器如何分析代码，从而能够检查代码的各种属性并告知编译过程的后续阶段（例如，类型检查）。</li>
+<li><a href="./part-5-intro.html">从MIR到二进制</a>: 如何连接生成的可执行机器码。</li>
+<li><a href="./appendix/background.html">附录</a>: 在本指南的结尾提供了一些有关的参考信息，如词汇表、推荐书目等。</li>
+</ol>
+<h3><a class="header" href="#持续更新" id="持续更新">持续更新</a></h3>
+<p>请记住，这 <code>rustc</code> 是一种真正的生产质量管理工具，由大量的贡献者不断进行研究贡献。因此，它有相当一部分代码库变更和技术上的欠缺。此外，本指南中讨论的许多想法都是尚未完全实现的理想化设计。所有这些使本指南在所有方面都保持最新，这非常困难！</p>
+<p>该指南本身当然也是开源的，可以在<a href="https://github.com/rust-lang/rustc-dev-guide/">GitHub存储库</a>中找到这些源(译者注: 这里的Github存储库为此文档的英文原文链接)。
+如果您在指南中发现任何错误，请提出相关问题，甚至更好的是，打开带有更正的PR！</p>
+<p>如果您想要为本指南(译者注: 指英文版)作出帮助，请参阅本指南中。
+<a href="contributing.html#contributing-to-rustc-dev-guide">有关编写文档的相应小节</a>.</p>
+<blockquote>
+<p>“‘All conditioned things are impermanent’ — when one sees this with wisdom, one turns away from
+suffering.” <em>The Dhammapada, verse 277</em></p>
+</blockquote>
+<h2><a class="header" href="#其他查找信息的网站" id="其他查找信息的网站">其他查找信息的网站</a></h2>
+<p>以下站点可能对你有所帮助：</p>
+<ul>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/">rustc API docs</a> -- 编译器的rustdoc文档。</li>
+<li><a href="https://forge.rust-lang.org/">Forge</a> -- 包含有关Rust的补充文档。</li>
+<li><a href="https://github.com/rust-lang/compiler-team/">compiler-team</a> -- rust编译器团队的主页，描述了开发的过程，活动工作组，团队日历等。</li>
+</ul>
 
                     </main>
 

@@ -167,7 +167,177 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#queries-demand-driven-compilation" id="queries-demand-driven-compilation">Queries: demand-driven compilation</a></h1>
+                        <h1><a class="header" href="#查询-需求驱动的编译" id="查询-需求驱动的编译">查询: 需求驱动的编译</a></h1>
+<p>如<a href="./compiler-src.html">编译器高级概述</a>中所述，Rust编译器当前（2021年1月 <!-- date: 2021-01 -->）仍然正在从传统的“基于 pass”的编译过程过渡到“需求驱动”的编译过程。**编译器查询系统是我们新的需求驱动型编译过程的关键。**背后的想法很简单。 您可以使用各种查询来计算某一输入的相关信息 – 例如，有一个名为<code>type_of(def_id)</code>的查询，传入某项的 <a href="appendix/glossary.html#def-id">def-id</a> ，它将计算该项的类型并将其返回给您。</p>
+<p>查询执行是<strong>记忆化</strong>的 —— 因此，第一次调用查询时，它将进行实际的计算，但是下一次，结果将从哈希表中返回。
+此外，查询执行非常适合“<strong>增量计算</strong>”； 大致的想法是，当您执行查询时，<strong>可能</strong>会通过从磁盘加载存储的数据来将结果返回给您（这是一个单独的主题，我们将不在此处进一步讨论）。</p>
+<p>总体上我们希望最终整个编译器控制流将由查询驱动。由一个顶层的查询（&quot;compile&quot;）来驱动一个crate上的编译；这会依次要求这个crate的各种信息。例如：</p>
+<ul>
+<li>此 &quot;compile&quot; 查询可能需要获取代码生成单元列表（即需要由LLVM编译的模块）。</li>
+<li>但是计算代码生成单元列表将调用一些子查询，该子查询返回 Rust 源代码中定义的所有模块的列表。</li>
+<li>这些子查询会要求查询HIR。</li>
+<li>就这样越推越远，直到我们完成实际的 parsing。</li>
+</ul>
+<p>这一愿景尚未完全实现。尽管如此，编译器的大量代码（例如生成MIR）已经完全像这样工作了。</p>
+<h3><a class="header" href="#增量编译的详细说明" id="增量编译的详细说明">增量编译的详细说明</a></h3>
+<p><a href="queries/incremental-compilation-in-detail.html">增量编译的详细说明</a>一章提供了关于什么是查询及其工作方式的深入描述。
+如果您打算编写自己的查询，那么可以读一读这一章节。</p>
+<h3><a class="header" href="#调用查询" id="调用查询">调用查询</a></h3>
+<p>调用查询很简单。 <code>tcx</code>（“类型上下文”）为每个定义好的查询都提供了一种方法。 因此，例如，要调用<code>type_of</code>查询，只需执行以下操作：</p>
+<pre><code class="language-rust ignore">let ty = tcx.type_of(some_def_id);
+</code></pre>
+<h3><a class="header" href="#编译器如何执行查询" id="编译器如何执行查询">编译器如何执行查询</a></h3>
+<p>您可能想知道调用查询方法时会发生什么。
+答案是，对于每个查询，编译器都会将结果缓存——如果您的查询已经执行过，那么我们将简单地从缓存中复制上一次的返回值并将其返回（因此，您应尝试确保查询的返回类型可以低成本的克隆；如有必要，请使用<code>Rc</code>）。</p>
+<h4><a class="header" href="#providers" id="providers">Providers</a></h4>
+<p>但是，如果查询不在缓存中，则编译器将尝试找到合适的 <strong>provider</strong>。
+provider 是已定义并链接到编译器的某个函数，其包含用于计算查询结果的代码。</p>
+<p><strong>Provider是按crate定义的。</strong>
+编译器（至少在概念上）在内部维护每个 crate 的 provider 表。
+目前，实际上 provider 分为了两组：用于查询“<strong>本crate</strong>”的 provider（即正在编译的crate）和用于查询“<strong>外部crate</strong>”（即正在编译的crate的依赖） 的 provider。
+请注意，确定查询所在的crate的类型不是查询的<em>类型</em>，而是<em>键</em>。
+例如，当您调用 <code>tcx.type_of(def_id)</code> 时，它可以是本地查询，也可以是外部查询，
+这取决于<code>def_id</code>所指的crate（请参阅<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/query/keys/trait.Key.html"><code>self::keys::Key</code></a> trait 以获取有关其工作原理的更多信息）。</p>
+<p>Provider 始终具有相同的函数签名：</p>
+<pre><code class="language-rust ignore">fn provider&lt;'tcx&gt;(
+    tcx: TyCtxt&lt;'tcx&gt;,
+    key: QUERY_KEY,
+) -&gt; QUERY_RESULT {
+    ...
+}
+</code></pre>
+<p>Provider 接受两个参数：<code>tcx</code> 和查询键，并返回查询结果。</p>
+<h4><a class="header" href="#如何初始化-provider" id="如何初始化-provider">如何初始化 provider</a></h4>
+<p>创建 tcx 时，它的创建者会使用<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/query/struct.Providers.html"><code>Providers</code></a>结构为它提供provider。
+此结构是由此处的宏生成的，但基本上就是一大堆函数指针：</p>
+<pre><code class="language-rust ignore">struct Providers {
+    type_of: for&lt;'tcx&gt; fn(TyCtxt&lt;'tcx&gt;, DefId) -&gt; Ty&lt;'tcx&gt;,
+    ...
+}
+</code></pre>
+<p>目前，我们为本地 crate 和所有外部 crate 各提供一份该结构的副本，最终计划是为每个crate提供一份。</p>
+<p>这些 <code>Provider</code> 结构最终是由 <code>librustc_driver</code> 创建并填充的，它通过调用各种<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/hir/fn.provide.html"><code>provide</code></a>函数，将工作分配给其他<code>rustc_*</code> crate。这些函数看起来像这样：</p>
+<pre><code class="language-rust ignore">pub fn provide(providers: &amp;mut Providers) {
+    *providers = Providers {
+        type_of,
+        ..*providers
+    };
+}
+</code></pre>
+<p>也就是说，他们接收一个  <code>&amp;mut Providers</code>  并对其进行原地修改。
+通常我们使用上面的写法只是因为它看起来比较漂亮，但是您也可以 <code>providers.type_of = type_of</code>，这是等效的。
+（在这里，<code>type_of</code> 将是一个顶层函数，如我们之前看到的那样定义。）
+因此，如果我们想为其他查询添加 provider，比如向前面的 crate 添加一个 <code>fubar</code>，我们可以这样修改 <code>provide</code> 函数：</p>
+<pre><code class="language-rust ignore">pub fn provide(providers: &amp;mut Providers) {
+    *providers = Providers {
+        type_of,
+        fubar,
+        ..*providers
+    };
+}
+
+fn fubar&lt;'tcx&gt;(tcx: TyCtxt&lt;'tcx&gt;, key: DefId) -&gt; Fubar&lt;'tcx&gt; { ... }
+</code></pre>
+<p>注意：大多数 <code>rustc_*</code> crate仅提供 <strong>本crate provider</strong>。
+几乎所有的<strong>外部 provider</strong> 都会通过 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_metadata/index.html"><code>rustc_metadata</code> crate</a> 进行处理，后者会从 crate 元数据中加载信息。
+但是在某些情况下，某些crate可以既提供本地也提供外部crate查询，在这种情况下，他们通过<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_llvm/attributes/fn.provide_both.html"><code>provide_both</code></a> 定义了 <code>provide</code> 和 <code>provide_extern</code> 函数，供<code>rustc_driver</code> 调用。 </p>
+<h3><a class="header" href="#添加一种新的查询" id="添加一种新的查询">添加一种新的查询</a></h3>
+<p>假设您想添加一种新的查询，您该怎么做？
+定义查询分为两个步骤：</p>
+<ol>
+<li>首先，必须指定查询名称和参数； 然后，</li>
+<li>您必须在需要的地方提供查询提供程序。</li>
+</ol>
+<p>要指定查询名称和参数，您只需将条目添加到
+<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/query/index.html"><code>compiler/rustc_middle/src/query/mod.rs</code></a> 中的大型宏调用之中，类似于：</p>
+<pre><code class="language-rust ignore">rustc_queries! {
+    Other {
+        /// Records the type of every item.
+        query type_of(key: DefId) -&gt; Ty&lt;'tcx&gt; {
+            cache { key.is_local() }
+        }
+    }
+
+    ...
+}
+</code></pre>
+<p>查询分为几类（<code>Other</code>，<code>Codegn</code>，<code>TypeChecking</code>等）。
+每组包含一个或多个查询。 每个查询的定义都是这样分解的：</p>
+<pre><code class="language-rust ignore">query type_of(key: DefId) -&gt; Ty&lt;'tcx&gt; { ... }
+^^    ^^^^^^^      ^^^^^     ^^^^^^^^   ^^^
+|     |            |         |          |
+|     |            |         |          查询修饰符
+|     |            |         查询的结果类型
+|     |            查询的 key 的类型
+|     查询名称
+query 关键字
+</code></pre>
+<p>让我们一一介绍它们：</p>
+<ul>
+<li>
+<p><strong>query关键字：</strong> 表示查询定义的开始。</p>
+</li>
+<li>
+<p>**查询名称：**查询方法的名称（<code>tcx.type_of(..)</code>）。也用作生成的表示此查询的结构体的名称（<code>ty::queries::type_of</code>）。</p>
+</li>
+<li>
+<p>**查询的 key 的类型：**此查询的参数类型。此类型必须实现 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/query/keys/trait.Key.html"><code>ty::query::keys::Key</code></a> trait，该trait定义了如何将其映射到 crate 等等。</p>
+</li>
+<li>
+<p><strong>查询的结果类型：</strong> 此查询产生的类型。
+这种类型应该</p>
+<p>（a）不使用 <code>RefCell</code> 等内部可变性模式，并且
+（b）可以廉价地克隆。对于非平凡的数据类型，建议使用 Interning 方法或使用<code>Rc</code>或<code>Arc</code>。</p>
+<ul>
+<li>一个例外是<code>ty::steal::Steal</code>类型，该类型用于廉价地修改MIR。有关更多详细信息，请参见<code>Steal</code>的定义。不应该在不警告<code>@rust-lang/compiler</code>的情况下添加对<code>Steal</code>的新的使用。</li>
+</ul>
+</li>
+<li>
+<p><strong>查询修饰符：</strong> 用于自定义查询处理方式的各种标志和选项（主要用于<a href="queries/incremental-compilation-in-detail.html#query-modifiers">增量编译</a>）。</p>
+</li>
+</ul>
+<p>因此，要添加查询：</p>
+<ul>
+<li>使用上述格式在 <code>rustc_queries!</code> 中添加一个条目。</li>
+<li>通过修改适当的 <code>provide</code> 方法建立和 provider 的关联； 或根据需要添加一个新文件，并确保<code>rustc_driver</code> 会调用它。</li>
+</ul>
+<h4><a class="header" href="#查询结构体和查询描述" id="查询结构体和查询描述">查询结构体和查询描述</a></h4>
+<p>对于每种类型，<code>rustc_queries</code> 宏都会生成一个以查询名字命名的“查询结构体”。
+此结构体是描述查询的一种占位符。 每个这样的结构都要实现<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/query/trait.QueryConfig.html"><code>self::config::QueryConfig</code></a> trait，
+该 trait 上有该特定查询的 键/值 的关联类型。
+基本上，生成的代码如下所示：</p>
+<pre><code class="language-rust ignore">// Dummy struct representing a particular kind of query:
+pub struct type_of&lt;'tcx&gt; { data: PhantomData&lt;&amp;'tcx ()&gt; }
+
+impl&lt;'tcx&gt; QueryConfig for type_of&lt;'tcx&gt; {
+  type Key = DefId;
+  type Value = Ty&lt;'tcx&gt;;
+
+  const NAME: QueryName = QueryName::type_of;
+  const CATEGORY: ProfileCategory = ProfileCategory::Other;
+}
+</code></pre>
+<p>您可能希望实现一个额外的trait，称为 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_query_system/query/config/trait.QueryDescription.html"><code>self::config::QueryDescription</code></a>。
+这个 trait 在发生循环引用错误时会被使用，为查询提供一个“人类可读”的名称，以便我们可以探明循环引用发生的情况。
+如果查询键是 <code>DefId</code>，则可以不实现这个 trait，但是如果<em>不</em>实现它，则会得到一个相当普遍的错误（“processing <code>foo</code> ...”）。
+您可以将新的 impl 放入<code>config</code>模块中。 像这样：</p>
+<pre><code class="language-rust ignore">impl&lt;'tcx&gt; QueryDescription for queries::type_of&lt;'tcx&gt; {
+    fn describe(tcx: TyCtxt, key: DefId) -&gt; String {
+        format!(&quot;computing the type of `{}`&quot;, tcx.def_path_str(key))
+    }
+}
+</code></pre>
+<p>另一个选择是添加<code>desc</code>修饰符：</p>
+<pre><code class="language-rust ignore">rustc_queries! {
+    Other {
+        /// Records the type of every item.
+        query type_of(key: DefId) -&gt; Ty&lt;'tcx&gt; {
+            desc { |tcx| &quot;computing the type of `{}`&quot;, tcx.def_path_str(key) }
+        }
+    }
+}
+</code></pre>
+<p><code>rustc_queries</code> 宏会自动生成合适的 <code>impl</code>。</p>
 
                     </main>
 
