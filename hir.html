@@ -167,7 +167,62 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#the-hir-high-level-ir" id="the-hir-high-level-ir">The HIR (High-level IR)</a></h1>
+                        <h1><a class="header" href="#hir" id="hir">HIR</a></h1>
+<!-- toc -->
+<p>HIR ——“高级中间表示” ——是大多数 rustc 组件中使用的主要IR。
+它是抽象语法树（AST）的对编译器更为友好的表示形式，该结构在语法分析，宏展开和名称解析之后生成（有关如何创建HIR，请参见<a href="./lowering.html">Lowering</a>）。
+HIR 的许多部分都非常类似于普通 Rust 的语法，但是 Rust 中的的某些表达式已被“脱糖”。
+例如，<code>for</code> 循环将转换为了 <code>loop</code>，因此在HIR中不会出现 <code>for</code> 。 这使HIR比普通AST更易于分析。</p>
+<p>本章介绍了HIR的主要概念。</p>
+<p>您可以通过给 rustc 传递 <code>-Zunpretty=hir-tree</code> 标志来查看代码的 HIR 表示形式：</p>
+<pre><code class="language-bash">cargo rustc -- -Zunpretty=hir-tree
+</code></pre>
+<h3><a class="header" href="#out-of-band-存储和crate类型" id="out-of-band-存储和crate类型">Out-of-band 存储和<code>Crate</code>类型</a></h3>
+<p>HIR中的顶层数据结构是 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/struct.Crate.html"><code>Crate</code></a>，它存储当前正在编译的 crate 的内容（我们从来就只为当前 crate 构造 HIR）。
+在 AST 中，crate 数据结构基本上只包含根模块，而 HIR <code>Crate</code> 结构则包含许多map 和其他用于组织 crate 内容以便于访问的数据。</p>
+<p>例如，HIR 中单个项目（例如模块、函数、trait、impl等）的内容不能在其父级中直接访问。
+因此，例如，如果有一个包含函数 <code>bar()</code> 的模块 <code>foo</code>：</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>mod foo {
+    fn bar() { }
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>那么在模块 <code>foo</code> 的HIR中表示（<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/struct.Mod.html"><code>Mod</code></a> 结构）中将只有<code>bar()</code>的**<code>ItemId</code>** <code>I</code>。
+要获取函数 <code>bar()</code> 的详细信息，我们将在 <code>items</code> 映射中查找 <code>I</code>。</p>
+<p>这种表示形式的一个好处是，可以通过遍历这些映射中的键值对来遍历 crate 中的所有项目（而无需遍历整个HIR）。
+对于 trait 项和 impl 项以及“实体”（如下所述）也有类似的map。</p>
+<p>使用这种表示形式的另一个原因是为了更好地与增量编译集成。
+这样，如果您访问 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/struct.Item.html"><code>&amp;rustc_hir::Item</code></a>（例如mod <code>foo</code>），不会同时立即去访问函数<code>bar()</code>的内容。
+相反，您只能访问 <code>bar()</code> 的<strong>id</strong>，必须将 id 传入某些函数来查找 <code>bar</code> 的内容。 这使编译器有机会观察到您访问了<code>bar()</code>的数据，然后记录依赖。</p>
+<p><a name="hir-id"></a></p>
+<h3><a class="header" href="#hir-中的标识符" id="hir-中的标识符">HIR 中的标识符</a></h3>
+<p>有许多不同的标识符可以引用HIR中的其他节点或定义：
+简单来说有：</p>
+<ul>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/def_id/struct.DefId.html"><code>DefId</code></a> 表示对任何其他 crate 中的一个<em>定义</em>的引用。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/def_id/struct.LocalDefId.html"><code>LocalDefId</code></a> 表示当前正在编译的 crate 中的一个<em>定义</em>的引用。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/hir_id/struct.HirId.html"><code>HirId</code></a> 表示对 HIR 中任何节点的引用。</li>
+</ul>
+<p>更多详细信息，请查看<a href="./identifiers.html#in-the-hir">有关标识符的章节</a>。 </p>
+<h3><a class="header" href="#hir-map" id="hir-map">HIR Map</a></h3>
+<p>在大多数情况下，当您使用HIR时，您将通过 <strong>HIR Map</strong> 进行操作，该map可通过<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.TyCtxt.html#method.hir"><code>tcx.hir()</code></a> 在tcx中访问（它在<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/hir/map/index.html"><code>hir::map</code></a>模块中定义）。
+<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/hir/map/struct.Map.html">HIR map</a> 包含<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/hir/map/struct.Map.html#methods">多个方法</a>，用于在各种 ID 之间进行转换并查找与 HIR 节点关联的数据。</p>
+<p>例如，如果您有一个 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/def_id/struct.DefId.html"><code>DefId</code></a>，并且想将其转换为 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/node_id/struct.NodeId.html"><code>NodeId</code></a>，则可以使用 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/hir/map/struct.Map.html#method.as_local_node_id"><code>tcx.hir().as_local_node_id(def_id)</code></a>。
+这将返回一个 <code>Option&lt;NodeId&gt;</code> —— 如果 def-id 引用了当前 crate 之外的内容（因为这种内容没有HIR节点），则将为<code>None</code>；
+否则这个函数将返回 <code>Some(n)</code>，其中 <code>n</code> 是定义对应的节点ID。</p>
+<p>同样，您可以使用<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/hir/map/struct.Map.html#method.find"><code>tcx.hir().find(n)</code></a>在节点上查找<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/node_id/struct.NodeId.html"><code>NodeId</code></a>。
+这将返回一个<code>Option&lt;Node&lt;'tcx&gt;&gt;</code>，其中<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/enum.Node.html"><code>Node</code></a>是在map中定义的枚举。</p>
+<p>通过对此枚举进行 match ，您可以找出 node-id 所指的节点类型，并获得指向数据本身的指针。
+一般来说，您已经事先知道了节点 <code>n</code> 是哪种类型——例如，如果您已经知道了 <code>n</code> 肯定是某个 HIR 表达式，
+则可以执行<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/hir/map/struct.Map.html#method.expect_expr"><code>tcx.hir().expect_expr(n)</code></a>，它将试图提取并返回<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/struct.Expr.html"><code>&amp;hir::Expr</code></a>，此时如果<code>n</code>实际上不是一个表达式，那么会程序会 panic。</p>
+<p>最后，您可以通过 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/hir/map/struct.Map.html#method.get_parent_node"><code>tcx.hir().get_parent_node(n)</code></a> 之类的调用，使用HIR map来查找节点的父节点。</p>
+<h3><a class="header" href="#hir-bodies" id="hir-bodies">HIR Bodies</a></h3>
+<p><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/struct.Body.html"><code>rustc_hir::Body</code></a> 代表某种可以执行的代码，例如函数/闭包的函数体或常量的定义。
+body 与一个<strong>所有者</strong>相关联，“所有者”通常是某种Item（例如，<code>fn()</code>或<code>const</code>），但也可以是闭包表达式（例如， <code>|x, y| x + y</code>）。
+您可以使用 HIR 映射来查找与给定 def-id（<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/hir/map/struct.Map.html#method.maybe_body_owned_by"><code>maybe_body_owned_by</code></a>）关联的body，或找到 body 的所有者（<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/hir/map/struct.Map.html#method.body_owner_def_id"><code>body_owner_def_id</code></a>）。</p>
 
                     </main>
 
