@@ -259,15 +259,15 @@ rust的编译器在两方面独具特色：首先它会对你的代码进行别�
   - 指南: [MIR (中级 IR)](https://rustc-dev-guide.rust-lang.org/mir/index.html)
   - 定义: [`rustc_middle/src/mir`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/mir/index.html)
   - 操纵 MIR 的源代码定义: [`rustc_mir`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/index.html)
-- The Borrow Checker
+- 借用检查器
   - 指南: [MIR 借用检查](https://rustc-dev-guide.rust-lang.org/borrow_check.html)
   - 定义: [`rustc_mir/borrow_check`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/borrow_check/index.html)
   - 主要入口点: [`mir_borrowck` 查询](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/borrow_check/fn.mir_borrowck.html)
-- MIR Optimizations
+- MIR 优化
   - 指南: [MIR Optimizations](https://rustc-dev-guide.rust-lang.org/mir/optimizations.html)
   - 定义: [`rustc_mir/transform`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/index.html)
   - 主要入口点: [`optimized_mir` 查询](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/fn.optimized_mir.html)
-- Code Generation
+- 代码生成
   - 指南: [代码生成](https://rustc-dev-guide.rust-lang.org/backend/codegen.html)
   - 使用 LLVM 通过 LLVM IR 生成机器代码 - **TODO: 参考?**
   - 主要入口点: [`rustc_codegen_ssa::base::codegen_crate`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/base/fn.codegen_crate.html)
