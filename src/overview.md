@@ -220,57 +220,57 @@ rust的编译器在两方面独具特色：首先它会对你的代码进行别�
 
 # 参考
 
-- Command line parsing
-  - Guide: [The Rustc Driver and Interface](https://rustc-dev-guide.rust-lang.org/rustc-driver.html)
-  - Driver definition: [`rustc_driver`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_driver/)
-  - Main entry point: [`rustc_session::config::build_session_options`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_session/config/fn.build_session_options.html)
-- Lexical Analysis: Lex the user program to a stream of tokens
-  - Guide: [Lexing and Parsing](https://rustc-dev-guide.rust-lang.org/the-parser.html)
-  - Lexer definition: [`rustc_lexer`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_lexer/index.html)
-  - Main entry point: [`rustc_lexer::first_token`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_lexer/fn.first_token.html)
-- Parsing: Parse the stream of tokens to an Abstract Syntax Tree (AST)
-  - Guide: [Lexing and Parsing](https://rustc-dev-guide.rust-lang.org/the-parser.html)
-  - Parser definition: [`rustc_parse`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/index.html)
-  - Main entry points:
-    - [Entry point for first file in crate](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_interface/passes/fn.parse.html)
-    - [Entry point for outline module parsing](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/module/fn.parse_external_mod.html)
-    - [Entry point for macro fragments][parse_nonterminal]
-  - AST definition: [`rustc_ast`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/ast/index.html)
-  - Expansion: **TODO**
-  - Name Resolution: **TODO**
-  - Feature gating: **TODO**
-  - Early linting: **TODO**
-- The High Level Intermediate Representation (HIR)
-  - Guide: [The HIR](https://rustc-dev-guide.rust-lang.org/hir.html)
-  - Guide: [Identifiers in the HIR](https://rustc-dev-guide.rust-lang.org/hir.html#identifiers-in-the-hir)
-  - Guide: [The HIR Map](https://rustc-dev-guide.rust-lang.org/hir.html#the-hir-map)
-  - Guide: [Lowering AST to HIR](https://rustc-dev-guide.rust-lang.org/lowering.html)
-  - How to view HIR representation for your code `cargo rustc -- -Z unpretty=hir-tree`
-  - Rustc HIR definition: [`rustc_hir`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/index.html)
-  - Main entry point: **TODO**
-  - Late linting: **TODO**
-- Type Inference
-  - Guide: [Type Inference](https://rustc-dev-guide.rust-lang.org/type-inference.html)
-  - Guide: [The ty Module: Representing Types](https://rustc-dev-guide.rust-lang.org/ty.html) (semantics)
-  - Main entry point (type inference): [`InferCtxtBuilder::enter`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_infer/infer/struct.InferCtxtBuilder.html#method.enter)
-  - Main entry point (type checking bodies): [the `typeck` query](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.TyCtxt.html#method.typeck)
-    - These two functions can't be decoupled.
-- The Mid Level Intermediate Representation (MIR)
-  - Guide: [The MIR (Mid level IR)](https://rustc-dev-guide.rust-lang.org/mir/index.html)
-  - Definition: [`rustc_middle/src/mir`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/mir/index.html)
-  - Definition of source that manipulates the MIR: [`rustc_mir`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/index.html)
+- 命令行解析
+  - 指南: [Rustc驱动以及接口](https://rustc-dev-guide.rust-lang.org/rustc-driver.html)
+  - 驱动定义: [`rustc_driver`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_driver/)
+  - 主要入口点: [`rustc_session::config::build_session_options`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_session/config/fn.build_session_options.html)
+- 词法分析：将用户程序转化为 token 流
+  - 指南: [词法分析以及解析](https://rustc-dev-guide.rust-lang.org/the-parser.html)
+  - 词法分析器定义: [`rustc_lexer`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_lexer/index.html)
+  - 主要入口: [`rustc_lexer::first_token`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_lexer/fn.first_token.html)
+- 解析：将 token 流解析为抽象语法树（AST）
+  - 指南: [词法分析以及解析](https://rustc-dev-guide.rust-lang.org/the-parser.html)
+  - 解析定义: [`rustc_parse`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/index.html)
+  - 入口点:
+    - [crate第一个文件的入口点](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_interface/passes/fn.parse.html)
+    - [大纲模块解析的入口点](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/module/fn.parse_external_mod.html)
+    - [宏段的入口点][parse_nonterminal]
+  - AST 定义：[`rustc_ast`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/ast/index.html)
+  - 展开: **TODO**
+  - 命名解析: **TODO**
+  - 特征门控: **TODO**
+  - 早期程序检查: **TODO**
+- 高级中间表示 (HIR)
+  - 指南: [HIR](https://rustc-dev-guide.rust-lang.org/hir.html)
+  - 指南: [HIR中的标识](https://rustc-dev-guide.rust-lang.org/hir.html#identifiers-in-the-hir)
+  - 指南: [HIR映射](https://rustc-dev-guide.rust-lang.org/hir.html#the-hir-map)
+  - 指南: [将AST低转为HIR](https://rustc-dev-guide.rust-lang.org/lowering.html)
+  - 如何查看你代码的 HIR 表示 `cargo rustc -- -Z unpretty=hir-tree`
+  - Rustc HIR 定义: [`rustc_hir`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/index.html)
+  - 主要入口点: **TODO**
+  - 后期程序检查: **TODO**
+- 类型推导
+  - 指南: [类型推导](https://rustc-dev-guide.rust-lang.org/type-inference.html)
+  - 指南: [ty模块：表示类型](https://rustc-dev-guide.rust-lang.org/ty.html) (语义学)
+  - 主要入口点 (类型推导): [`InferCtxtBuilder::enter`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_infer/infer/struct.InferCtxtBuilder.html#method.enter)
+  - 主要入口点 (类型检查主题): [`typeck`查询](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.TyCtxt.html#method.typeck)
+    - 这两个函数不能被解耦。
+- 中级中间表示 (MIR)
+  - 指南: [MIR (中级 IR)](https://rustc-dev-guide.rust-lang.org/mir/index.html)
+  - 定义: [`rustc_middle/src/mir`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/mir/index.html)
+  - 操纵 MIR 的源代码定义: [`rustc_mir`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/index.html)
 - The Borrow Checker
-  - Guide: [MIR Borrow Check](https://rustc-dev-guide.rust-lang.org/borrow_check.html)
-  - Definition: [`rustc_mir/borrow_check`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/borrow_check/index.html)
-  - Main entry point: [`mir_borrowck` query](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/borrow_check/fn.mir_borrowck.html)
+  - 指南: [MIR 借用检查](https://rustc-dev-guide.rust-lang.org/borrow_check.html)
+  - 定义: [`rustc_mir/borrow_check`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/borrow_check/index.html)
+  - 主要入口点: [`mir_borrowck` 查询](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/borrow_check/fn.mir_borrowck.html)
 - MIR Optimizations
-  - Guide: [MIR Optimizations](https://rustc-dev-guide.rust-lang.org/mir/optimizations.html)
-  - Definition: [`rustc_mir/transform`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/index.html)
-  - Main entry point: [`optimized_mir` query](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/fn.optimized_mir.html)
+  - 指南: [MIR Optimizations](https://rustc-dev-guide.rust-lang.org/mir/optimizations.html)
+  - 定义: [`rustc_mir/transform`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/index.html)
+  - 主要入口点: [`optimized_mir` 查询](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/fn.optimized_mir.html)
 - Code Generation
-  - Guide: [Code Generation](https://rustc-dev-guide.rust-lang.org/backend/codegen.html)
-  - Generating Machine Code from LLVM IR with LLVM - **TODO: reference?**
-  - Main entry point: [`rustc_codegen_ssa::base::codegen_crate`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/base/fn.codegen_crate.html)
-    - This monomorphizes and produces LLVM IR for one codegen unit. It then
-      starts a background thread to run LLVM, which must be joined later.
-    - Monomorphization happens lazily via [`FunctionCx::monomorphize`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/struct.FunctionCx.html#method.monomorphize) and [`rustc_codegen_ssa::base::codegen_instance `](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/base/fn.codegen_instance.html)
+  - 指南: [代码生成](https://rustc-dev-guide.rust-lang.org/backend/codegen.html)
+  - 使用 LLVM 通过 LLVM IR 生成机器代码 - **TODO: 参考?**
+  - 主要入口点: [`rustc_codegen_ssa::base::codegen_crate`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/base/fn.codegen_crate.html)
+    - 它单态化并且产出 LLVM IR给一个代码生成单元。
+    它之后启动一个后台线程来运行一个之后必须被接合的LLVM。
+    - 单态化通过[`FunctionCx::monomorphize`](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/struct.FunctionCx.html#method.monomorphize) 懒启动以及[`rustc_codegen_ssa::base::codegen_instance `](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/base/fn.codegen_instance.html)
