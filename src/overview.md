@@ -184,54 +184,41 @@ rust的编译器在两方面独具特色：首先它会对你的代码进行别�
 
 [ty]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/type.Ty.html
 
-### Parallelism
+### 并行性
 
-Compiler performance is a problem that we would like to improve on
-(and are always working on). One aspect of that is parallelizing
-`rustc` itself.
+编译器表现是我们希望改进的一个问题（并且一直为之努力）。一个方面便是将 `rustc` 自身并行化。
 
-Currently, there is only one part of rustc that is already parallel: codegen.
-During monomorphization, the compiler will split up all the code to be
-generated into smaller chunks called _codegen units_. These are then generated
-by independent instances of LLVM. Since they are independent, we can run them
-in parallel. At the end, the linker is run to combine all the codegen units
-together into one binary.
+目前，rustc 只有一个部分已经实现了并行化：代码生成。在单态化的过程中，编译器会将所有的代码
+分割生成为叫做 _代码生成单元_ 的小块。它们之后由独立的 LLVM 实例生成。由于它们都是独立的，
+我们可以并行地运行它们。最后，运行链接器来组合所有地代码生成单元成为一个二进制文件。
 
-However, the rest of the compiler is still not yet parallel. There have been
-lots of efforts spent on this, but it is generally a hard problem. The current
-approach is to turn `RefCell`s into `Mutex`s -- that is, we
-switch to thread-safe internal mutability. However, there are ongoing
-challenges with lock contention, maintaining query-system invariants under
-concurrency, and the complexity of the code base. One can try out the current
-work by enabling parallel compilation in `config.toml`. It's still early days,
-but there are already some promising performance improvements.
+但是，编译器余下的部分仍然是未并行化的。我们已经为此付出了很多努力，但是它始终是一个难题。
+目前的方法是把 `RefCell`s 转化为一些 `Mutex`s —— 那代表着我们转换到了线程安全的内部可变性。
+但是仍然有许多在途的挑战比如锁争夺、维护并发下的查询系统不变量以及代码库的复杂性。
+你可以通过在`config.toml`中启用并行编译来尝试并行工作。它仍处于早期阶段，但是有一些
+有保障的性能改进。
 
-### Bootstrapping
+### 自举
 
-`rustc` itself is written in Rust. So how do we compile the compiler? We use an
-older compiler to compile the newer compiler. This is called [_bootstrapping_].
+`rustc`自身是由 Rust 编写的。所以我们如何编译编译器？我们使用一个较老的编译器来编译
+更新的编译器。这被称作 [_自举_]。
 
-Bootstrapping has a lot of interesting implications. For example, it means
-that one of the major users of Rust is the Rust compiler, so we are
-constantly testing our own software ("eating our own dogfood").
+自举有许多有趣的含义。举个例子，它意味着 Rust 一个主要用户是 Rust 编译器，所以我们
+持续的测试我们自己的软件（“吃我们自己的狗粮”）。
 
-For more details on bootstrapping, see
-[the bootstrapping section of the guide][rustc-bootstrap].
+对于更多关于自举的细节，详见[这份指导书的自举部分][rustc-bootstrap]。
 
-[_bootstrapping_]: https://en.wikipedia.org/wiki/Bootstrapping_(compilers)
+[_自举_]: https://en.wikipedia.org/wiki/Bootstrapping_(compilers)
 [rustc-bootstrap]: building/bootstrapping.md
 
-# Unresolved Questions
+# 未被解决的问题
 
-- Does LLVM ever do optimizations in debug builds?
-- How do I explore phases of the compile process in my own sources (lexer,
-  parser, HIR, etc)? - e.g., `cargo rustc -- -Z unpretty=hir-tree` allows you to
-  view HIR representation
-- What is the main source entry point for `X`?
-- Where do phases diverge for cross-compilation to machine code across
-  different platforms?
+- LLVM 在 debug 建造的时候做优化了吗？
+- 我如何在我自己的资源下浏览编译的各个过程（词法分析器、解析器、HIR 等等）？—— 比如，`cargo rustc -- -Z unpretty=hir-tree` 允许你查看 HIR 表示
+- 什么是`X`的主要入口点？
+- 交叉翻译到不同平台的机器码时，哪个阶段发生了分歧?
 
-# References
+# 参考
 
 - Command line parsing
   - Guide: [The Rustc Driver and Interface](https://rustc-dev-guide.rust-lang.org/rustc-driver.html)
