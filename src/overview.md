@@ -148,54 +148,39 @@ rust的编译器在两方面独具特色：首先它会对你的代码进行别�
 查询的角果被缓存于硬盘上，这样我们就可以分辨相较于上次编译，哪些查询的结果改变了，并且仅重做这些查询。
 这就是增量编译是如何工作的。
 
-In principle, for the query-fied steps, we do each of the above for each item
-individually. For example, we will take the HIR for a function and use queries
-to ask for the LLVM IR for that HIR. This drives the generation of optimized
-MIR, which drives the borrow checker, which drives the generation of MIR, and
-so on.
+理论上讲，对于查询化步骤，我们独立完成上述每一项工作。举个例子，我们会将 HIR 带入一个函数
+并且使用查询来请求该 HIR 的 LLVM IR。这驱动了优化 MIR 的生成，MIR 驱动了借用检查器，借用
+检查器又驱动了 MIR 的生成，等等。
 
-... except that this is very over-simplified. In fact, some queries are not
-cached on disk, and some parts of the compiler have to run for all code anyway
-for correctness even if the code is dead code (e.g. the borrow checker). For
-example, [currently the `mir_borrowck` query is first executed on all functions
-of a crate.][passes] Then the codegen backend invokes the
-`collect_and_partition_mono_items` query, which first recursively requests the
-`optimized_mir` for all reachable functions, which in turn runs `mir_borrowck`
-for that function and then creates codegen units. This kind of split will need
-to remain to ensure that unreachable functions still have their errors emitted.
+……除了那以外，这是非常过于简化的。事实上，有些查询并不是缓存于磁盘上的，并且编译器的某些部分
+需要对所有代码运行正确性检查，即便是代码是无效的（比如借用检查器）。举个例子，[目前对于一个crate的所有函数`mir_borrowck`查询是第一个运行的。][passes]
+之后代码生成器后端触发`collect_and_partition_mono_items`查询，它首先递归地对所有可达函数
+请求`optimized_mir`，而接下来对函数运行`mir_borrowck`并且之后创建代码生成单元。
+这种分割将需要保留下来以保证不可达的函数仍然将他们的错误发送出来。
 
 [passes]: https://github.com/rust-lang/rust/blob/45ebd5808afd3df7ba842797c0fcd4447ddf30fb/src/librustc_interface/passes.rs#L824
 
-Moreover, the compiler wasn't originally built to use a query system; the query
-system has been retrofitted into the compiler, so parts of it are not
-query-fied yet. Also, LLVM isn't our code, so that isn't querified
-either. The plan is to eventually query-fy all of the steps listed in the
-previous section, but as of this writing, only the steps between HIR and
-LLVM-IR are query-fied. That is, lexing and parsing are done all at once for
-the whole program.
+此外，编译器建造之初是不使用查询系统的；查询系统是被加装到编译器中的，所以它有些部分还没被查询化。
+同时，LLVM不是我们的代码，所以它也不是查询化的。计划是将前些部分所列举的步骤最终全部查询化，
+但是对于本文，只有介于 HIR 和 LLVM-IR 之间的步骤是被查询化了的。这意味着对于整个程序，
+词法分析以及解析都是被一次性完成的。
 
-One other thing to mention here is the all-important "typing context",
-[`TyCtxt`], which is a giant struct that is at the center of all things.
-(Note that the name is mostly historic. This is _not_ a "typing context" in the
-sense of `Γ` or `Δ` from type theory. The name is retained because that's what
-the name of the struct is in the source code.) All
-queries are defined as methods on the [`TyCtxt`] type, and the in-memory query
-cache is stored there too. In the code, there is usually a variable called
-`tcx` which is a handle on the typing context. You will also see lifetimes with
-the name `'tcx`, which means that something is tied to the lifetime of the
-`TyCtxt` (usually it is stored or interned there).
+另一件这里要提到的事是非常重要的“类型上下文”，[`TyCtxt`]，它是一个相当巨大的结构体，
+是所有东西的中心。（注意它的名字极其有历史性。这 _不_ 是指类型理论中的`Γ`或`Δ`一类的东西。
+这个名字被保留下来是因为它就是源代码中结构体的名称。）所有查询都被定义为在[`TyCtxt`]类型上
+的方法，并且内存中的查询缓存也同样被存储在此。在代码中，通常会有一个名为`tcx`变量，它是
+类型上下文上的一个句柄。有同样会见到名为`'tcx`的生命周期，这意味着有东西被和`TyCtxt`的
+生命周期绑定在了一起（通常它会被存储或者被驻留化）。
 
 [`TyCtxt`]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.TyCtxt.html
 
 ### `ty::Ty`
 
-Types are really important in Rust, and they form the core of a lot of compiler
-analyses. The main type (in the compiler) that represents types (in the user's
-program) is [`rustc_middle::ty::Ty`][ty]. This is so important that we have a whole chapter
-on [`ty::Ty`][ty], but for now, we just want to mention that it exists and is the way
-`rustc` represents types!
+类型在 Rust 中相当重要，并且他们形成了许多编译器分析的核心。用于表示类型（在用户程序中）的
+主要类型（在编译器中）是 [`rustc_middle::ty::Ty`][ty]。它是如此的重要以至于我们为其
+设置了一整章[`ty::Ty`][ty]，但是对于现在而言，我们只想提到它存在并且是`rustc`用来表示类型的方法！
 
-Also note that the `rustc_middle::ty` module defines the `TyCtxt` struct we mentioned before.
+同样注意到`rustc_middle::ty`模块定义了我们之前提到的`TyCtxt`结构体。
 
 [ty]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/type.Ty.html
 
