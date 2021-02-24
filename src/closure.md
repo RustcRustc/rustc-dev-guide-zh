@@ -1,6 +1,6 @@
 # rustc中的闭包扩展
 
-这一节描述了rustc是如何处理闭包的。Rust中的闭包实际上沦为了来自其创建者栈帧的结构体，该结构体包含了他们使用的值（或使用值的引用）。rustc的工作是要弄清楚闭包使用了哪些值，以及是如何使用的，这样他就可以决定是通过共享引用，可变引用还是通过转移所有权来捕获给定的变量。rustc也需要弄清楚闭包能够实现哪种闭包特征([`Fn`][fn]，[`FnMut`][fn_mut]，或[`FnOnce`][fn_once])。
+这一节描述了rustc是如何处理闭包的。Rust中的闭包实际上沦为了来自其创建者栈帧的结构体，该结构体包含了他们使用的值（或使用值的引用）。rustc的工作是要弄清楚闭包使用了哪些值，以及是如何使用的，这样他就可以决定是通过共享引用，可变引用还是通过移动来捕获给定的变量。rustc也需要弄清楚闭包能够实现哪种闭包特征([`Fn`][fn]，[`FnMut`][fn_mut]，或[`FnOnce`][fn_once])。
 
 [fn]: https://doc.rust-lang.org/std/ops/trait.Fn.html
 [fn_mut]:https://doc.rust-lang.org/std/ops/trait.FnMut.html
@@ -90,64 +90,40 @@ fn main() {
 ```rust,ignore
 _6 = [closure@move.rs:7:13: 9:6] { x: move _1 }; // bb16[3]: scope 1 at move.rs:7:13: 9:6
 ```
-这里, `x`的所有权直接被转移到了闭包内，因此在闭包代码块之后将不允许访问这个变量了。
+这里, `x`直接被移入了闭包内，因此在闭包代码块之后将不允许访问这个变量了。
 
-## 编译器中的推论
+## 编译器中的推断
 
 现在，让我们深入研究rustc的代码，看看编译器是如何完成所有这些推断的。
 
-Let's start with defining a term that we will be using quite a bit in the rest of the discussion -
-*upvar*. An **upvar** is a variable that is local to the function where the closure is defined. So,
-in the above examples, **x** will be an upvar to the closure. They are also sometimes referred to as
-the *free variables* meaning they are not bound to the context of the closure.
-[`compiler/rustc_middle/src/ty/query/mod.rs`][upvars] defines a query called *upv.rs_mentioned*
-for this purpose.
+首先，我们先定义一个术语*upvar*，它在我们之后的讨论中会经常使用到。**upvar**是定义闭包的函数的本地变量。所以，在上述示例中，**x**对于闭包来说是一个upvar。它们有时也会被称为*空闲变量*以表示它们并未绑定到闭包的上下文中。[`compiler/rustc_middle/src/ty/query/mod.rs`][upvars]为此定义了一个被成为*upv.rs_mentioned*的查询。 
 
 [upvars]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/query/queries/struct.upvars_mentioned.html
 
-Other than lazy invocation, one other thing that distinguishes a closure from a
-normal function is that it can use the upvars. It borrows these upvars from its surrounding
-context; therefore the compiler has to determine the upvar's borrow type. The compiler starts with
-assigning an immutable borrow type and lowers the restriction (that is, changes it from
-**immutable** to **mutable** to **move**) as needed, based on the usage. In the Example 1 above, the
-closure only uses the variable for printing but does not modify it in any way and therefore, in the
-`mir_dump`, we find the borrow type for the upvar `x` to be immutable.  In example 2, however, the
-closure modifies `x` and increments it by some value.  Because of this mutation, the compiler, which
-started off assigning `x` as an immutable reference type, has to adjust it as a mutable reference.
-Likewise in the third example, the closure drops the vector and therefore this requires the variable
-`x` to be moved into the closure. Depending on the borrow kind, the closure has to implement the
-appropriate trait: `Fn` trait for immutable borrow, `FnMut` for mutable borrow,
-and `FnOnce` for move semantics.
+除了懒调用，另一个将闭包区别于普通函数的特征就是它可以从上下文中借用这些upvar；因此编译器必须确定upvar的借用类型。基于这个用途，编译器从分配一个不可变的借用类型开始，可以根据需要来减少限制（将它从**不可变**变成**可变**，再变成**移动**）。 在上述的示例1中，闭包仅仅将变量用于打印，而不以任何方式对其进行修改，因此在`mir_dump`中，我们发现借用类型的upvar变量`x`是不可变的。但是，在示例2中，闭包修改了`x`并将其加上了某个值。由于这种改变，编译器从将`x`分配为不可变的引用类型开始，必须将其调整为可变的引用。同样的，在示例3中，闭包释放了向量`x`，因此要求将变量`x`移入闭包内。依赖于借用类型，闭包需要实现合适的特征：`Fn`特征对应不可变借用, `FnMut`对应可变借用，`FnOnce`对应于移动语义。
 
-Most of the code related to the closure is in the
-[`compiler/rustc_typeck/src/check/upvar.rs`][upvar] file and the data structures are
-declared in the file [`compiler/rustc_middle/src/ty/mod.rs`][ty].
+大多数与闭包相关的代码在[`compiler/rustc_typeck/src/check/upvar.rs`][upvar]文件中，数据结构定义在[`compiler/rustc_middle/src/ty/mod.rs`][ty]文件中。
 
 [upvar]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/check/upvar/index.html
 [ty]:https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/index.html
 
-Before we go any further, let's discuss how we can examine the flow of control through the rustc
-codebase. For closures specifically, set the `RUST_LOG` env variable as below and collect the
-output in a file:
+在我们进一步深入之前，一起讨论下如何通过rustc代码库来检测控制流。对于闭包来说，像下面一样设置`RUST_LOG`环境变量并在文件中收集输出。
 
 ```console
 > RUST_LOG=rustc_typeck::check::upvar rustc +stage1 -Z dump-mir=all \
     <.rs file to compile> 2> <file where the output will be dumped>
 ```
 
-This uses the stage1 compiler and enables `debug!` logging for the
-`rustc_typeck::check::upvar` module.
+这里使用了stage1编译器，并为`rustc_typeck::check::upvar`模块启用了`debug!`日志。
 
-The other option is to step through the code using lldb or gdb.
+另一种选择是使用lldb或gdb逐步执行代码。
 
 1. `rust-lldb build/x86_64-apple-darwin/stage1/bin/rustc test.rs`
-2. In lldb:
-    1. `b upvar.rs:134`  // Setting the breakpoint on a certain line in the upvar.rs file`
-    2. `r`  // Run the program until it hits the breakpoint
+2. 在lldb中：
+    1. `b upvar.rs:134`  // 在upvar.rs文件中的某行上设置断点
+    2. `r`  // 一直运行程序直到打到了该断点上
 
-Let's start with [`upvar.rs`][upvar]. This file has something called
-the [`euv::ExprUseVisitor`] which walks the source of the closure and
-invokes a callbackfor each upvar that is borrowed, mutated, or moved.
+让我们从[`upvar.rs`][upvar]开始. 这个文件有一个叫[`euv::ExprUseVisitor`]的结构，该结构遍历闭包的源码并为每一个被借用，被更改，被移动的upvar触发了一个回调。
 
 [`euv::ExprUseVisitor`]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/expr_use_visitor/struct.ExprUseVisitor.html
 
@@ -161,32 +137,17 @@ fn main() {
 }
 ```
 
-In the above example, our visitor will be called twice, for the lines marked 1 and 2, once for a
-shared borrow and another one for a mutable borrow. It will also tell us what was borrowed.
+在上面的示例中，我们的访问器将会调用两次，对于标记了1和2的代码行，一个用于共享借用，另一个用于可变借用。它还会告诉我们借用了什么。
 
-The callbacks are defined by implementing the [`Delegate`] trait. The
-[`InferBorrowKind`][ibk] type implements `Delegate` and keeps a map that
-records for each upvar which mode of capture was required. The modes of capture
-can be `ByValue` (moved) or `ByRef` (borrowed). For `ByRef` borrows, the possible
-[`BorrowKind`]s are `ImmBorrow`, `UniqueImmBorrow`, `MutBorrow` as defined in the
-[`compiler/rustc_middle/src/ty/mod.rs`][middle_ty].
+通过实现[`Delegate`]特征来定义回调。[`InferBorrowKind`][ibk]类型实现了`Delegate`并维护了一个map来记录每个upvar需要哪种捕获方式。捕获的方式可以是`ByValue`（被移动）或者是`ByRef`（被借用）。对于`ByRef`借用，[`BorrowKind`]可能是定义在[`compiler/rustc_middle/src/ty/mod.rs`][middle_ty]中的`ImmBorrow`，`UniqueImmBorrow`，`MutBorrow`。
 
 [`BorrowKind`]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/enum.BorrowKind.html
 [middle_ty]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/index.html
 
-`Delegate` defines a few different methods (the different callbacks):
-**consume** for *move* of a variable, **borrow** for a *borrow* of some kind
-(shared or mutable), and **mutate** when we see an *assignment* of something.
+`Delegate`定义了一些不同的方法（不同的回调）：
+**consume**方法用于*移动*变量，**borrow**方法用于某种（共享的或可变的）借用，而当我们看到某种事物的分配时，则调用**mutate**方法。
 
-All of these callbacks have a common argument *cmt* which stands for Category,
-Mutability and Type and is defined in
-[`compiler/rustc_middle/src/middle/mem_categorization.rs`][cmt]. Borrowing from the code
-comments, "`cmt` is a complete categorization of a value indicating where it
-originated and how it is located, as well as the mutability of the memory in
-which the value is stored". Based on the callback (consume, borrow etc.), we
-will call the relevant *adjust_upvar_borrow_kind_for_<something>* and pass the
-`cmt` along. Once the borrow type is adjusted, we store it in the table, which
-basically says what borrows were made for each closure.
+所有的这些回调都有一个共同的参数*cmt*，该参数代表类别，可变形和类型。他定义在[`compiler/rustc_middle/src/middle/mem_categorization.rs`][cmt]中。代码注释中写到：“`cmt`是一个值的完整分类，它指明了该值的起源和位置，以及存储该值的内存的可变性”。根据这些回调（consume，borrow等），我们将会调用相关的*adjust_upvar_borrow_kind_for_<something>*并传递`cmt`。一旦借用类型有了调整，我们将它存储在表中，基本上说明了每个闭包都借用了什么。
 
 ```rust,ignore
 self.tables
