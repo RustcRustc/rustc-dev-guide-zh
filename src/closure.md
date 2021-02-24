@@ -24,7 +24,7 @@ fn main() {
 }
 ```
 
-假设上面是名为`immut.rs`文件的内容。如果我们用以下的命令来编译`immut.rs`，[`-Z dump-mir=all`][dump-mir]将导致`rustc`生成[MIR][mir]并将其转储到`mir_dump`目录中。
+假设上面是名为`immut.rs`文件的内容。如果我们用以下的命令来编译`immut.rs`，[`-Z dump-mir=all`][dump-mir]参数将会使`rustc`生成[MIR][mir]并将其转储到`mir_dump`目录中。
 ```console
 > rustc +stage1 immut.rs -Z dump-mir=all
 ```
@@ -41,7 +41,7 @@ _3 = [closure@immut.rs:7:13: 7:36] { x: move _4 };
 
 请注意在这节的MIR示例中，`_1`就是`x`。
 
-这里是第一行：`_4 = &_1;`，`mir_dump`告诉我们`x`作为不可变引用被借用了。这是我们希望的，因为我们的闭包需要读取`x`。
+在第一行`_4 = &_1;`中，`mir_dump`告诉我们`x`作为不可变引用被借用了。这是我们希望的，因为我们的闭包需要读取`x`。
 
 ### 示例 2
 
