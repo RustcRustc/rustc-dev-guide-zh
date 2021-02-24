@@ -147,7 +147,7 @@ fn main() {
 `Delegate`定义了一些不同的方法（不同的回调）：
 **consume**方法用于*移动*变量，**borrow**方法用于某种（共享的或可变的）借用，而当我们看到某种事物的分配时，则调用**mutate**方法。
 
-所有的这些回调都有一个共同的参数*cmt*，该参数代表类别，可变形和类型。他定义在[`compiler/rustc_middle/src/middle/mem_categorization.rs`][cmt]中。代码注释中写到：“`cmt`是一个值的完整分类，它指明了该值的起源和位置，以及存储该值的内存的可变性”。根据这些回调（consume，borrow等），我们将会调用相关的*adjust_upvar_borrow_kind_for_<something>*并传递`cmt`。一旦借用类型有了调整，我们将它存储在表中，基本上说明了每个闭包都借用了什么。
+所有的这些回调都有一个共同的参数*cmt*，该参数代表类别，可变形和类型。他定义在[`compiler/rustc_middle/src/middle/mem_categorization.rs`][cmt]中。代码注释中写到：“`cmt`是一个值的完整分类，它指明了该值的起源和位置，以及存储该值的内存的可变性”。根据这些回调（consume，borrow等），我们将会调用相关的`adjust_upvar_borrow_kind_for_<something>`并传递`cmt`。一旦借用类型有了调整，我们将它存储在表中，基本上说明了每个闭包都借用了什么。
 
 ```rust,ignore
 self.tables
