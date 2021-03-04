@@ -693,7 +693,320 @@ fn test_foo() {
 <h1><a class="header" href="#第三部分高层编译器架构" id="第三部分高层编译器架构">第三部分：高层编译器架构</a></h1>
 <p>本指南的剩余部分将会讨论编译器是如何工作的。他们会从编译器高层结构的角度逐一介绍编译的每个阶段是如何工作的。对于那些对端到端的编译过程感兴趣的读者， <em>以及</em> 想要了解自己希望作出贡献的特定系统的读者，这些指南会是友好的。如果觉得有不清楚的事情，尽管在<a href="https://github.com/rust-lang/rustc-dev-guide/issues">rustc-dev-guide 仓库</a>中提出 issue，或者联系在<a href="./compiler-team.html">第一章这个部分</a>中提到的编译器团队。</p>
 <p>在这个部分，我们将会着眼于高层编译器架构。特别的，我们会将目光放在影响整个编译器的三个总体设计上：查询系统，增量编译以及驻留。</p>
-<h1><a class="header" href="#overview-of-the-compiler" id="overview-of-the-compiler">Overview of the Compiler</a></h1>
+<h1><a class="header" href="#编译器概览" id="编译器概览">编译器概览</a></h1>
+<!-- toc -->
+<p>这一章是关于编译程序时的总体过程 —— 所有东西是如何组合起来的。</p>
+<p>rust的编译器在两方面独具特色：首先它会对你的代码进行别的编译器不会进行的操作（比如借用检查），并且有许多非常规的实现选择（比如查询）。
+我们将会在这一章中逐一讨论这些，并且在指南接下来的部分，我们会更深入细节的审视所有单独的部分。</p>
+<h2><a class="header" href="#编译器对你的代码做了什么" id="编译器对你的代码做了什么">编译器对你的代码做了什么</a></h2>
+<p>首先，我们来看看编译器对你的代码做了些什么。现在，除非必须，我们会避免提及编译器是如何实现这些步骤的；我们之后才会讨论这些。</p>
+<ul>
+<li>
+<p>编译步骤从用户编写Rust程序文本并且使用 <code>rustc</code> 编译器对其进行处理开始。命令行参数指明了编译器需要做的工作。
+举个例子，我们可以启用开发版特性（<code>-Z</code> 标识），执行 <code>check</code>——仅执行构建，或者得到LLVM-IR而不是可执行机器码。
+通过使用 <code>cargo</code>，<code>rustc</code> 的执行可能是不直接的。</p>
+</li>
+<li>
+<p>命令行参数解析在 <a href="https://rustc-dev-guide.rust-lang.org/rustc-driver.html"><code>rustc_driver</code></a> 中发生。这个 crate 定义了用户请求的编译配置
+并且将其作为一个 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_interface/interface/struct.Config.html"><code>rustc_interface::Config</code></a> 传给接下来的编译过程。</p>
+</li>
+<li>
+<p>原始的 Rust 源文本被位于 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_lexer/index.html"><code>rustc_lexer</code></a> 的底层词法分析器分析。在这个阶段，源文本被转化成被称为 <em>tokens</em> 的
+原子源码单位序列。 词法分析器支持 Unicode 字符编码。</p>
+</li>
+<li>
+<p>token 序列传给了位于 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/index.html"><code>rustc_parse</code></a> 的高层词法分析器以为编译流程的下一个阶段做准备。
+<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/lexer/struct.StringReader.html"><code>StringReader</code></a> 结构体在这个阶段被用于执行一系列的验证工作并且将字符串转化为驻留符号（稍后便会讨论 <em>驻留</em>）。
+[字符串驻留] 是一种将多个相同的不可变字符串只存储一次的技术。</p>
+</li>
+<li>
+<p>词法分析器有小的接口并且不直接依赖于<code>rustc</code>中的诊断基础设施。反之，它提供在<code>rustc_parse::lexer::mod</code>中被发送为真实诊断
+的作为普通数据的诊断。</p>
+</li>
+<li>
+<p>词法分析器为 IDE 以及 过程宏 保留有全保真度的信息。</p>
+</li>
+<li>
+<p>解析器 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/index.html">将从词法分析器中得到的token序列转化为抽象语法树（AST）</a>。它使用递归下降（自上而下）的方式来进行语法解析。
+解析器的 crate 入为<code>rustc_parse::parser::item</code>中的<code>Parser::parse_crate_mod()</code>以及<code>Parser::parse_mod()</code>函数。
+外部模块解析入口为<code>rustc_expand::module::parse_external_mod</code>。
+以及宏解析入口为<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/parser/struct.Parser.html#method.parse_nonterminal"><code>Parser::parse_nonterminal()</code></a>。</p>
+</li>
+<li>
+<p>解析经由一系列 <code>Parser</code> 工具函数执行，包括<code>fn bump</code>，<code>fn check</code>，<code>fn eat</code>，<code>fn expect</code>，<code>fn look_ahead</code>。</p>
+</li>
+<li>
+<p>解析是由要被解析的语义构造所组织的。分离的<code>parse_*</code>方法可以在<code>rustc_parse</code> <code>parser</code>文件夹中找到。
+源文件的名字和构造名相同。举个例子，在解析器中能找到以下的文件：</p>
+<ul>
+<li><code>expr.rs</code></li>
+<li><code>pat.rs</code></li>
+<li><code>ty.rs</code></li>
+<li><code>stmt.rs</code></li>
+</ul>
+</li>
+<li>
+<p>这种命名方案被广泛地应用于编译器的各个阶段。你会发现有文件或者文件夹在解析、降低、类型检查、THIR降低、以及MIR源构建。</p>
+</li>
+<li>
+<p>宏展开、AST验证、命名解析、以及程序错误检查都在编译过程的这个阶段进行。</p>
+</li>
+<li>
+<p>解析器使用标准 <code>DiagnosticBuilder</code> API 来进行错误处理，但是我们希望在一个错误发生时，
+尝试恢复、解析Rust语法的一个超集。</p>
+</li>
+<li>
+<p><code>rustc_ast::ast::{Crate, Mod, Expr, Pat, ...}</code> AST节点从解析器中被返回。</p>
+</li>
+<li>
+<p>我们接下来拿到AST并且<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/index.html">将其转化为高级中间标识（HIR）</a>。这是一种编译器友好的AST表示方法。
+这包括到很多如循环、<code>async fn</code>之类的解糖化的东西。</p>
+</li>
+<li>
+<p>我们使用 HIR 来进行[类型推导]。 这是对于一个表达式，自动检测其类型的过程。</p>
+</li>
+<li>
+<p><strong>TODO：也许在这里还有其他事情被完成了？我认为初始化类型检查在这里进行了？以及 trait 解析？</strong></p>
+</li>
+<li>
+<p>HIR之后 <a href="https://rustc-dev-guide.rust-lang.org/mir/index.html">被降低为中级中间标识（MIR）</a>。</p>
+<ul>
+<li>同时，我们构造 THIR ，THIR是更解糖化的 HIR。THIR被用于模式和详尽性检验。
+同时，它相较于 HIR 更容易被转化为MIR。</li>
+</ul>
+</li>
+<li>
+<p>MIR被用于[借用检查]。</p>
+</li>
+<li>
+<p>我们（想要）<a href="https://rustc-dev-guide.rust-lang.org/mir/optimizations.html">在 MIR 上做许多优化</a>因为它仍然是通用的，
+并且这样能改进我们接下来生成的代码，同时也能加快编译速度。</p>
+<ul>
+<li>MIR 是高级（并且通用的）表示形式，所以在 MIR 层做优化要相较于在 LLVM-IR 层更容易。
+举个例子，LLVM看起来是无法优化 <a href="https://github.com/rust-lang/rust/pull/66282"><code>simplify_try</code></a> 这样的模式，而mir优化则可以。</li>
+</ul>
+</li>
+<li>
+<p>Rust 代码是 <em>单态化</em> 的，这意味着对于所有所有通用代码进行带被具体类型替换的类型参数的拷贝。
+要做到这一点，我们要生成一个列表来存储需要为什么具体类型生成代码。这被称为 <em>单态集合</em>。</p>
+</li>
+<li>
+<p>我们接下来开始进行被依稀称作 <em>代码生成</em> 或者 <em>codegen</em>。</p>
+<ul>
+<li><a href="https://rustc-dev-guide.rust-lang.org/backend/codegen.html">代码生成（codegen）</a>是将高等级源表示转化为可执行二进制码的过程。
+<code>rustc</code>使用LLVM来进行代码生成。第一步就是将 MIR 转化为 LLVM 中间表示（LLVM IR）。
+这是 MIR 依据我们由上一步生成的列表来真正被单态化的时候。</li>
+<li>LLVM IR 被传给 LLVM，并且由其进行更多的优化。之后它产生机器码，
+这基本就是添加了附加底层类型以及注解的汇编代码。（比如一个 ELF 对象或者 wasm）。</li>
+<li>不同的库/二进制内容被链接以产生最终的二进制内容。</li>
+</ul>
+</li>
+</ul>
+<h2><a class="header" href="#编译器是怎么做的" id="编译器是怎么做的">编译器是怎么做的</a></h2>
+<p>好，我们现在已经从高层视角看了编译器对你的代码做了什么，那让我们再从高层视角看看编译器是 <em>怎么</em> 做到这些的。
+这里有很多编译器需要满足/优化的限制以及冲突目标。举个例子，</p>
+<ul>
+<li>编译速度：编译一份程序有多快。更多/好的编译时分析通常意味着编译会更慢。
+<ul>
+<li>与此同时，我们想要支持增量编译，因此我们需要将其纳入考虑。
+我们怎样才能衡量哪些工作需要被重做，以及当用户修改程序时哪些东西能被重用？
+<ul>
+<li>与此同时，我们不能在增量缓存中存储太多东西，因为这样会花费很多时间来从磁盘上加载
+并且会占用很多用户的系统空间……</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>编译器内存占用：当编译一份程序时，我们不希望使用多余的内存。</li>
+<li>程序运行速度：编译出来的程序运行得有多快。更多/好的编译时分析通常意味着编译器可以做更好的优化。</li>
+<li>程序大小：编译出来的二进制程序有多大？和前一个点类似。</li>
+<li>编译器编译速度：编译这个编译器要花多长的时间？这影响着贡献者和编译器的维护。</li>
+<li>实现复杂度：制造一个编译器是一个人/组能做到的最困难的事之一，并且 Rust 不是一门非常简单的语言，
+那么我们应该如何让编译器的代码基础便于管理？</li>
+<li>编译正确性：编译器创建的二进制程序应该完成输入程序告诉要做的事，
+并且应该不论后面持续发生的大量变化持续进行。</li>
+<li>整合工作：编译器需要对以不同方式使用编译器的其他工具（比如 cargo，clippy，miri，RLS）提供支持。</li>
+<li>编译器稳定性：发布在 stable channel 上的编译器不应该无故崩溃或者出故障。</li>
+<li>Rust 稳定性：编译器必须遵守 Rust 的稳定性承诺，保证之前能够编译的程序不会因为编译器的实现的许多变化
+而无法编译。</li>
+<li>其他工具的限制：rustc 在后端使用了 LLVM ，一方面我们希望借助 LLVM 的一些好处来优化编译器，
+另一方面我们需要针对它的一些限制/坏处做一些处理。</li>
+</ul>
+<p>总之，当你阅读指南的接下来的部分的时候，好好记住这些事。他们将通常会指引我们作出选择。</p>
+<h3><a class="header" href="#中间形式表示" id="中间形式表示">中间形式表示</a></h3>
+<p>和大多数编译器一样，<code>rustc</code>使用了某种中间表示（IRs）来简化计算。通常，
+直接用源代码来进行我们的工作是极度不方便并且容易出错的。源代码通常被设计的对人类友好，有复意的，
+但是当做一些工作，比如类型检查的时候会较为不方便。</p>
+<p>因此大多数编译器，包括<code>rustc</code>，根据源代码创建某种便于分析的 IR 。<code>rust</code> 有一些 IRs，
+其各自根据不同的目的做了优化：</p>
+<ul>
+<li>Token 序列：词法分析器根据源代码直接生成了一个 token 序列。这个 token 序列相较于原始文本
+更便于解析器处理。</li>
+<li>抽象语法树（AST）：抽象语法树根据词法分析器生成的 token 序列创建。它几乎表示的就是用户所写的。
+它帮助进行句法健全性检查（比如检查用户是否在正确的位置写了所期望的类型）。</li>
+<li>高级 IR（HIR）：它是一些解糖的 AST。从句法的角度上，它仍然接近于用户所写的内容，
+但是它包含了一些诸如省略了的生命周期之类的信息。这种 IR 可以被用于类型检查。</li>
+<li>类型化的 HIR（THIR）：这是介于 HIR 与 MIR 之间的中间形式，曾被称为高级抽象 IR （HAIR）。
+它类似于 HIR 但是它完整地类型化了并且稍微更加地解糖化（比如方法调用以及隐式解引用在这里被完全地显式化）。
+此外，相较于HIR，THIR更容易降低化到 MIR。</li>
+<li>中级 IR（MIR）：这种 IR 基本属于控制流程图（CFG）。控制流程图是一种展示程序基础块以及控制流是如何在其间流通的图表。
+同时，MIR 也有一些带有简单类型化语句的基础块（比如赋值语句、简单计算语句等等）以及链接其他基础块的控制流边
+（比如调用语句、丢弃值等等）。MIR 被用于借用检查和其他重要的基于数据流的检查，比如检查未初始化的值。
+它同样被用来做一系列优化以及常值评估（通过 MIRI）。因为 MIR 仍然是普通形式，比起在单态化之后我们在这里可以做更多分析。</li>
+<li>LLVM IR：这是 LLVM 编译器所有输入的标准形式。LLVM IR 是一些带有许多注解的类型化的汇编语言。
+它是所有使用 LLVM 的编译器的标准格式（比如 C 编译器 clang 同样输出 LLVM IR）。</li>
+</ul>
+<p>另一件要注意的事是，许多在编译器中的值被 <em>驻留</em> 了。这是一种性能和内存优化手段，
+我们将值收集到一个特殊的被称作 <em>arena</em> 的收集器中。之后，我们将引用逐个对应到 arena 中收集的值上。
+这使得我们可以保证相同的值（比如你程序中的类型）只被收集一次并且可以廉价地使用指针进行比较。
+许多内部表示都被驻留了。</p>
+<h3><a class="header" href="#查询" id="查询">查询</a></h3>
+<p>第一个主要的选择是 <em>查询</em> 系统。rust 编译器使用了一种不同于大多数书本上的所写编译器的查询系统，
+后者是按顺序执行的一系列代码传递组织的。而 rust 编译器这样做是为了能够做到增量编译 ── 即，
+当用户对其程序作出修改并且重新编译，我们希望尽可能少地做（与上一次编译所做的）相重复的工作来创建新的二进制文件。</p>
+<p>在<code>rustc</code>中，所有以上这些主要步骤被组织为互相调用的一些查询。举个例子。假如有一条查询负责询问某个东西的类型，
+而另一条查询负责询问某个函数的优化后的 MIR。这些查询可以相互调用并且由查询系统所跟踪。
+查询的角果被缓存于硬盘上，这样我们就可以分辨相较于上次编译，哪些查询的结果改变了，并且仅重做这些查询。
+这就是增量编译是如何工作的。</p>
+<p>理论上讲，对于查询化步骤，我们独立完成上述每一项工作。举个例子，我们会将 HIR 带入一个函数
+并且使用查询来请求该 HIR 的 LLVM IR。这驱动了优化 MIR 的生成，MIR 驱动了借用检查器，借用
+检查器又驱动了 MIR 的生成，等等。</p>
+<p>……除了那以外，这是非常过于简化的。事实上，有些查询并不是缓存于磁盘上的，并且编译器的某些部分
+需要对所有代码运行正确性检查，即便是代码是无效的（比如借用检查器）。举个例子，<a href="https://github.com/rust-lang/rust/blob/45ebd5808afd3df7ba842797c0fcd4447ddf30fb/src/librustc_interface/passes.rs#L824">目前对于一个crate的所有函数<code>mir_borrowck</code>查询是第一个运行的。</a>
+之后代码生成器后端触发<code>collect_and_partition_mono_items</code>查询，它首先递归地对所有可达函数
+请求<code>optimized_mir</code>，而接下来对函数运行<code>mir_borrowck</code>并且之后创建代码生成单元。
+这种分割将需要保留下来以保证不可达的函数仍然将他们的错误发送出来。</p>
+<p>此外，编译器建造之初是不使用查询系统的；查询系统是被加装到编译器中的，所以它有些部分还没被查询化。
+同时，LLVM不是我们的代码，所以它也不是查询化的。计划是将前些部分所列举的步骤最终全部查询化，
+但是对于本文，只有介于 HIR 和 LLVM-IR 之间的步骤是被查询化了的。这意味着对于整个程序，
+词法分析以及解析都是被一次性完成的。</p>
+<p>另一件这里要提到的事是非常重要的“类型上下文”，<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.TyCtxt.html"><code>TyCtxt</code></a>，它是一个相当巨大的结构体，
+是所有东西的中心。（注意它的名字极其有历史性。这 <em>不</em> 是指类型理论中的<code>Γ</code>或<code>Δ</code>一类的东西。
+这个名字被保留下来是因为它就是源代码中结构体的名称。）所有查询都被定义为在<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.TyCtxt.html"><code>TyCtxt</code></a>类型上
+的方法，并且内存中的查询缓存也同样被存储在此。在代码中，通常会有一个名为<code>tcx</code>变量，它是
+类型上下文上的一个句柄。有同样会见到名为<code>'tcx</code>的生命周期，这意味着有东西被和<code>TyCtxt</code>的
+生命周期绑定在了一起（通常它会被存储或者被驻留化）。</p>
+<h3><a class="header" href="#tyty" id="tyty"><code>ty::Ty</code></a></h3>
+<p>类型在 Rust 中相当重要，并且他们形成了许多编译器分析的核心。用于表示类型（在用户程序中）的
+主要类型（在编译器中）是 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/type.Ty.html"><code>rustc_middle::ty::Ty</code></a>。它是如此的重要以至于我们为其
+设置了一整章<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/type.Ty.html"><code>ty::Ty</code></a>，但是对于现在而言，我们只想提到它存在并且是<code>rustc</code>用来表示类型的方法！</p>
+<p>同样注意到<code>rustc_middle::ty</code>模块定义了我们之前提到的<code>TyCtxt</code>结构体。</p>
+<h3><a class="header" href="#并行性" id="并行性">并行性</a></h3>
+<p>编译器表现是我们希望改进的一个问题（并且一直为之努力）。一个方面便是将 <code>rustc</code> 自身并行化。</p>
+<p>目前，rustc 只有一个部分已经实现了并行化：代码生成。在单态化的过程中，编译器会将所有的代码
+分割生成为叫做 <em>代码生成单元</em> 的小块。它们之后由独立的 LLVM 实例生成。由于它们都是独立的，
+我们可以并行地运行它们。最后，运行链接器来组合所有地代码生成单元成为一个二进制文件。</p>
+<p>但是，编译器余下的部分仍然是未并行化的。我们已经为此付出了很多努力，但是它始终是一个难题。
+目前的方法是把 <code>RefCell</code>s 转化为一些 <code>Mutex</code>s —— 那代表着我们转换到了线程安全的内部可变性。
+但是仍然有许多在途的挑战比如锁争夺、维护并发下的查询系统不变量以及代码库的复杂性。
+你可以通过在<code>config.toml</code>中启用并行编译来尝试并行工作。它仍处于早期阶段，但是有一些
+有保障的性能改进。</p>
+<h3><a class="header" href="#自举" id="自举">自举</a></h3>
+<p><code>rustc</code>自身是由 Rust 编写的。所以我们如何编译编译器？我们使用一个较老的编译器来编译
+更新的编译器。这被称作 <a href="https://en.wikipedia.org/wiki/Bootstrapping_(compilers)"><em>自举</em></a>。</p>
+<p>自举有许多有趣的含义。举个例子，它意味着 Rust 一个主要用户是 Rust 编译器，所以我们
+持续的测试我们自己的软件（“吃我们自己的狗粮”）。</p>
+<p>对于更多关于自举的细节，详见<a href="building/bootstrapping.html">这份指导书的自举部分</a>。</p>
+<h1><a class="header" href="#未被解决的问题" id="未被解决的问题">未被解决的问题</a></h1>
+<ul>
+<li>LLVM 在 debug 建造的时候做优化了吗？</li>
+<li>我如何在我自己的资源下浏览编译的各个过程（词法分析器、解析器、HIR 等等）？—— 比如，<code>cargo rustc -- -Z unpretty=hir-tree</code> 允许你查看 HIR 表示</li>
+<li>什么是<code>X</code>的主要入口点？</li>
+<li>交叉翻译到不同平台的机器码时，哪个阶段发生了分歧?</li>
+</ul>
+<h1><a class="header" href="#参考" id="参考">参考</a></h1>
+<ul>
+<li>命令行解析
+<ul>
+<li>指南: <a href="https://rustc-dev-guide.rust-lang.org/rustc-driver.html">Rustc驱动以及接口</a></li>
+<li>驱动定义: <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_driver/"><code>rustc_driver</code></a></li>
+<li>主要入口点: <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_session/config/fn.build_session_options.html"><code>rustc_session::config::build_session_options</code></a></li>
+</ul>
+</li>
+<li>词法分析：将用户程序转化为 token 流
+<ul>
+<li>指南: <a href="https://rustc-dev-guide.rust-lang.org/the-parser.html">词法分析以及解析</a></li>
+<li>词法分析器定义: <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_lexer/index.html"><code>rustc_lexer</code></a></li>
+<li>主要入口: <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_lexer/fn.first_token.html"><code>rustc_lexer::first_token</code></a></li>
+</ul>
+</li>
+<li>解析：将 token 流解析为抽象语法树（AST）
+<ul>
+<li>指南: <a href="https://rustc-dev-guide.rust-lang.org/the-parser.html">词法分析以及解析</a></li>
+<li>解析定义: <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/index.html"><code>rustc_parse</code></a></li>
+<li>入口点:
+<ul>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_interface/passes/fn.parse.html">crate第一个文件的入口点</a></li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/module/fn.parse_external_mod.html">大纲模块解析的入口点</a></li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/parser/struct.Parser.html#method.parse_nonterminal">宏段的入口点</a></li>
+</ul>
+</li>
+<li>AST 定义：<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/ast/index.html"><code>rustc_ast</code></a></li>
+<li>展开: <strong>TODO</strong></li>
+<li>命名解析: <strong>TODO</strong></li>
+<li>特征门控: <strong>TODO</strong></li>
+<li>早期程序检查: <strong>TODO</strong></li>
+</ul>
+</li>
+<li>高级中间表示 (HIR)
+<ul>
+<li>指南: <a href="https://rustc-dev-guide.rust-lang.org/hir.html">HIR</a></li>
+<li>指南: <a href="https://rustc-dev-guide.rust-lang.org/hir.html#identifiers-in-the-hir">HIR中的标识</a></li>
+<li>指南: <a href="https://rustc-dev-guide.rust-lang.org/hir.html#the-hir-map">HIR映射</a></li>
+<li>指南: <a href="https://rustc-dev-guide.rust-lang.org/lowering.html">将AST低转为HIR</a></li>
+<li>如何查看你代码的 HIR 表示 <code>cargo rustc -- -Z unpretty=hir-tree</code></li>
+<li>Rustc HIR 定义: <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/index.html"><code>rustc_hir</code></a></li>
+<li>主要入口点: <strong>TODO</strong></li>
+<li>后期程序检查: <strong>TODO</strong></li>
+</ul>
+</li>
+<li>类型推导
+<ul>
+<li>指南: <a href="https://rustc-dev-guide.rust-lang.org/type-inference.html">类型推导</a></li>
+<li>指南: <a href="https://rustc-dev-guide.rust-lang.org/ty.html">ty模块：表示类型</a> (语义学)</li>
+<li>主要入口点 (类型推导): <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_infer/infer/struct.InferCtxtBuilder.html#method.enter"><code>InferCtxtBuilder::enter</code></a></li>
+<li>主要入口点 (类型检查主题): <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.TyCtxt.html#method.typeck"><code>typeck</code>查询</a>
+<ul>
+<li>这两个函数不能被解耦。</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>中级中间表示 (MIR)
+<ul>
+<li>指南: <a href="https://rustc-dev-guide.rust-lang.org/mir/index.html">MIR (中级 IR)</a></li>
+<li>定义: <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/mir/index.html"><code>rustc_middle/src/mir</code></a></li>
+<li>操纵 MIR 的源代码定义: <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/index.html"><code>rustc_mir</code></a></li>
+</ul>
+</li>
+<li>借用检查器
+<ul>
+<li>指南: <a href="https://rustc-dev-guide.rust-lang.org/borrow_check.html">MIR 借用检查</a></li>
+<li>定义: <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/borrow_check/index.html"><code>rustc_mir/borrow_check</code></a></li>
+<li>主要入口点: <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/borrow_check/fn.mir_borrowck.html"><code>mir_borrowck</code> 查询</a></li>
+</ul>
+</li>
+<li>MIR 优化
+<ul>
+<li>指南: <a href="https://rustc-dev-guide.rust-lang.org/mir/optimizations.html">MIR Optimizations</a></li>
+<li>定义: <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/index.html"><code>rustc_mir/transform</code></a></li>
+<li>主要入口点: <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/fn.optimized_mir.html"><code>optimized_mir</code> 查询</a></li>
+</ul>
+</li>
+<li>代码生成
+<ul>
+<li>指南: <a href="https://rustc-dev-guide.rust-lang.org/backend/codegen.html">代码生成</a></li>
+<li>使用 LLVM 通过 LLVM IR 生成机器代码 - <strong>TODO: 参考?</strong></li>
+<li>主要入口点: <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/base/fn.codegen_crate.html"><code>rustc_codegen_ssa::base::codegen_crate</code></a>
+<ul>
+<li>它单态化并且产出 LLVM IR给一个代码生成单元。
+它之后启动一个后台线程来运行一个之后必须被接合的LLVM。</li>
+<li>单态化通过<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/struct.FunctionCx.html#method.monomorphize"><code>FunctionCx::monomorphize</code></a> 懒启动以及<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/base/fn.codegen_instance.html"><code>rustc_codegen_ssa::base::codegen_instance </code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
 <h1><a class="header" href="#编译器源代码概览" id="编译器源代码概览">编译器源代码概览</a></h1>
 <!-- toc -->
 <blockquote>
@@ -943,8 +1256,109 @@ impl&lt;'tcx&gt; QueryConfig for type_of&lt;'tcx&gt; {
 <h1><a class="header" href="#debugging-and-testing" id="debugging-and-testing">Debugging and Testing</a></h1>
 <h1><a class="header" href="#profiling-queries" id="profiling-queries">Profiling Queries</a></h1>
 <h1><a class="header" href="#salsa" id="salsa">Salsa</a></h1>
-<h1><a class="header" href="#memory-management-in-rustc" id="memory-management-in-rustc">Memory Management in Rustc</a></h1>
-<h1><a class="header" href="#serialization-in-rustc" id="serialization-in-rustc">Serialization in Rustc</a></h1>
+<h1><a class="header" href="#rustc-中的内存管理" id="rustc-中的内存管理">Rustc 中的内存管理</a></h1>
+<p>Rustc 在内存管理方面相当谨慎。编译器在整个编译过程中需要分配 <em>大量</em> 的数据结构，如果我们不够谨慎，这将会耗费大量时间和空间。</p>
+<p>使用 arenas 和 interning 是编译器管理内存的主要方式之一。</p>
+<h2><a class="header" href="#arenas-和-interning" id="arenas-和-interning">Arenas 和 Interning</a></h2>
+<p>在编译期间我们需要创建大量的数据结构。出于对性能的考虑，我们通常从全局内存池中分配这些数据结构; 每个数据结构都从一个长期 <em>arena</em> 中分配一次。这就是所谓的 <em>arena allocation</em>。这个系统减少了内存的分配/释放。它还允许简单地比较类型是否相等: 对每个 interned 类型 <code>X</code> 实现了 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.TyS.html#implementations"><code>X</code> 的 <code>PartialEq</code></a>，因此我们只比较指针就可以判断是否相等。 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.CtxtInterners.html#structfield.arena"><code>CtxtInterners</code></a> 类型包含一系列 interned 类型和 arena 本身的映射。</p>
+<h3><a class="header" href="#例-tytys" id="例-tytys">例: <code>ty::TyS</code></a></h3>
+<p>以 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.TyS.html"><code>ty::TyS</code></a> 为例，它表示编译器中的类型(在<a href="./ty.html">这里</a>了解更多)。每当我们想要构造一个类型时，编译器都不会傻乎乎地直接从缓冲区分配。相反，编译器检查是否构造过该类型。如果构造过的话，只需要获取一个指向之前构造个的类型的指针，否则，就会创建一个新的指针。对于这个设计，如果想知道两种类型是否相同，只需要比较两个指针。<code>TyS</code> 是精心设计的，所以你永远无法在栈上构造 <code>TyS</code>。你只能从这个 arena 分配并 intern <code>TyS</code>，所以它是独一无二的。</p>
+<p>在编译开始时，我们会创建一个缓冲区，每当需要分配一个类型时，就从缓冲区中使用这些类型。如果用完了，就会再创建一个。缓冲区的生命周期为 <code>'tcx</code> 。我们的类型绑定到该生命周期，因此当编译完成时，与该缓冲区相关的所有内存都被释放，<code>'tcx</code> 的引用将无效。</p>
+<p>除了类型之外，还可以分配很多其它的 arena-allocated 数据结构，这些数据结构可以在该模块中找到。以下是一些例子:</p>
+<ul>
+<li><a href="./generic_arguments.html#subst"><code>Substs</code></a>，分配给 <code>mk_substs</code> – 这会 intern 一个切片类型，通常用于指定要替换泛型的值(例如 <code>HashMap&lt;i32, u32&gt;</code> 将被表示为切片 <code>&amp;'tcx [tcx.types.i32, tcx.types.u32]</code>)。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.TraitRef.html"><code>TraitRef</code></a>，通常通过值传递 – 一个 <strong>trait 引用</strong> 包含一个引用的 trait 及其各种类型参数(包括 <code>Self</code>)，如 <code>i32: Display</code> (这里 def-id 会引用 <code>Display</code> trait，并且子类型包含 <code>i32</code>)。 注意 <code>def-id</code> 的定义及讨论在 <code>AdtDef and DefId</code> 部分。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.Predicate.html"><code>Predicate</code></a> 定义 trait 系统要保证的东西 (见 <code>traits</code> 模块)。</li>
+</ul>
+<h2><a class="header" href="#tcx-和怎样使用生命周期" id="tcx-和怎样使用生命周期">tcx 和怎样使用生命周期</a></h2>
+<p><code>tcx</code>(“typing context”)是编译器中的中枢数据结构。它是用于执行各种查询的上下文。 <code>TyCtxt</code> 结构体定义了对这个共享上下文的引用:</p>
+<pre><code class="language-rust ignore">tcx: TyCtxt&lt;'tcx&gt;
+//          ----
+//          |
+//          arena lifetime
+</code></pre>
+<p>如你所见，<code>TyCtxt</code> 类型使用生命周期参数。当你看到类似 <code>'tcx</code> 生命周期的引用时，你就知道它指的是 arena-allocated 的数据(或者说，数据的生命周期至少与 arenas 一样长)。</p>
+<h3><a class="header" href="#关于生命周期" id="关于生命周期">关于生命周期</a></h3>
+<p>Rust 编译器是一个相当大的程序，包含大量的大数据结构(如 AST、 HIR 和类型系统)，因此非常依赖于 arenas 和引用(references)来减少不必要的内存使用。这体现在使用插入编译器(例如 <a href="./rustc-driver.html">driver</a>)的方式上，倾向于使用“push”风格(回调)的 API ，而不是 Rust-ic 风格的“pull”风格(考虑 <code>Iterator</code> trait)。</p>
+<p>编译器通过大量使用线程本地存储和 interning 来减少复制，同时也避免了无处不在的生命期而导致的用户不友好。<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/tls/index.html"><code>rustc_middle::ty::tls</code></a> 模块用于访问这些线程局部变量，尽管你很少需要接触。</p>
+<h1><a class="header" href="#rustc-中的序列化" id="rustc-中的序列化">Rustc 中的序列化</a></h1>
+<p>Rustc 需要在编译期 <a href="https://en.wikipedia.org/wiki/Serialization">序列化</a> 和反序列化各种数据。特别是:</p>
+<ul>
+<li>&quot;Crate 元数据&quot;，主要是查询输出，在编译 crate 时，以二进制格式序列化并输出到 <code>rlib</code> 和 <code>rmeta</code> 文件中，由依赖该库的 crate 将这些文件反序列化。</li>
+<li>某些查询输出以二进制格式序列化为<a href="queries/incremental-compilation-in-detail.html#the-real-world-how-persistence-makes-everything-complicated">持久化增量编译结果</a>。</li>
+<li><code>-Z ast-json</code> 和 <code>-Z ast-json-noexpand</code> 标记以 json 格式序列化 <a href="the-parser.html">AST</a>, 并将结果输出到标准输出。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/struct.CrateInfo.html"><code>CrateInfo</code></a>使用 <code>-Z no-link</code> 标记时被序列化到 json，使用 <code>-Z link-only</code> 标志时，从 json 反序列化。</li>
+</ul>
+<h2><a class="header" href="#encodable-和-decodable-trait" id="encodable-和-decodable-trait"><code>Encodable</code> 和 <code>Decodable</code> trait</a></h2>
+<p><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_serialize/index.html"><code>rustc_serialize</code></a> crate 为可序列化类型定义了两个 trait:</p>
+<pre><code class="language-rust ignore">pub trait Encodable&lt;S: Encoder&gt; {
+    fn encode(&amp;self, s: &amp;mut S) -&gt; Result&lt;(), S::Error&gt;;
+}
+
+pub trait Decodable&lt;D: Decoder&gt;: Sized {
+    fn decode(d: &amp;mut D) -&gt; Result&lt;Self, D::Error&gt;;
+}
+</code></pre>
+<p>还为整型，浮点型，<code>bool</code>，<code>char</code>，<code>str</code> 和各种通用标准库类型都定义了这两个 trait 的实现。</p>
+<p>由这些类型组合成的类型，通常通过 <a href="serialization.html#derive-macros">derives</a> 实现 <code>Encodable</code> 和 <code>Decodable</code>。这些生成的实现将结构体或枚举中的字段反序列化。对于一个结构体的实现像下面这样:</p>
+<pre><code class="language-rust ignore">#![feature(rustc_private)]
+extern crate rustc_serialize;
+use rustc_serialize::{Decodable, Decoder, Encodable, Encoder};
+
+struct MyStruct {
+    int: u32,
+    float: f32,
+}
+
+impl&lt;E: Encoder&gt; Encodable&lt;E&gt; for MyStruct {
+    fn encode(&amp;self, s: &amp;mut E) -&gt; Result&lt;(), E::Error&gt; {
+        s.emit_struct(&quot;MyStruct&quot;, 2, |s| {
+            s.emit_struct_field(&quot;int&quot;, 0, |s| self.int.encode(s))?;
+            s.emit_struct_field(&quot;float&quot;, 1, |s| self.float.encode(s))
+        })
+    }
+}
+impl&lt;D: Decoder&gt; Decodable&lt;D&gt; for MyStruct {
+    fn decode(s: &amp;mut D) -&gt; Result&lt;MyStruct, D::Error&gt; {
+        s.read_struct(&quot;MyStruct&quot;, 2, |d| {
+            let int = d.read_struct_field(&quot;int&quot;, 0, Decodable::decode)?;
+            let float = d.read_struct_field(&quot;float&quot;, 1, Decodable::decode)?;
+
+            Ok(MyStruct { int, float })
+        })
+    }
+}
+</code></pre>
+<h2><a class="header" href="#编码和解码-arena-allocated-类型" id="编码和解码-arena-allocated-类型">编码和解码 arena allocated 类型</a></h2>
+<p>Rustc 有许多 <a href="memory.html">arena allocated 类型</a>。如果不访问分配这些类型的 arena 就无法反序列化这些类型。<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/codec/trait.TyEncoder.html"><code>TyDecoder</code></a> 和 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/codec/trait.TyDecoder.html"><code>TyEncoder</code></a> trait 是允许访问 <code>TyCtxt</code> 的 <code>Decoder</code> 和 <code>Encoder</code> 的 super trait。</p>
+<p>对于包含 arena allocated 类型的类型，则将实现这些 trait 的 <code>Encodable</code> 和 <code>Decodable</code> 的类型参数绑定在一起。例如</p>
+<pre><code class="language-rust ignore">impl&lt;'tcx, D: TyDecoder&lt;'tcx&gt;&gt; Decodable&lt;D&gt; for MyStruct&lt;'tcx&gt; {
+    /* ... */
+}
+</code></pre>
+<p><code>TyEncodable</code> 和 <code>TyDecodable</code> <a href="serialization.html#derive-macros">derive 宏</a> 将其扩展为这种实现。</p>
+<p>解码实际的 arena allocated 类型比较困难，因为孤儿规则导致一些实现无法编写。为解决这个问题，<code>rustc_middle</code> 中的定义的 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/codec/trait.RefDecodable.html"><code>RefDecodable</code></a> trait。可以给任意类型实现。<code>TyDecodable</code> 宏会调用 <code>RefDecodable</code> 去解码引用，但是对不同的泛型代码实际上需要特定的类型解码器 <code>Decodable</code>。</p>
+<p>对 interned 类型而言，使用新的类型包装器，如 <code>ty::Predicate</code> 和手动实现 <code>Encodable</code> 和 <code>Decodable</code> 可能更简单，而不是手动实现 <code>RefDecodable</code>。</p>
+<h2><a class="header" href="#derive-宏" id="derive-宏">Derive 宏</a></h2>
+<p><code>rustc_macros</code> crate 定义各种 drive，帮助实现 <code>Decodable</code> 和 <code>Encodable</code>。</p>
+<ul>
+<li><code>Encodable</code> 和 <code>Decodable</code> 宏会生成适用于所有 <code>Encoders</code> 和 <code>Decoders</code> 的实现。这些应该用在不依赖 <code>rustc_middle</code> 的 crate 中，或必须序列化但没有实现 <code>TyEncoder</code> 的类型。</li>
+<li><code>MetadataEncodable</code> 和 <code>MetadataDecodable</code> 生成仅允许通过 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_metadata/rmeta/encoder/struct.EncodeContext.html"><code>rustc_metadata::rmeta::encoder::EncodeContext</code></a> 和 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_metadata/rmeta/decoder/struct.DecodeContext.html"><code>rustc_metadata::rmeta::decoder::DecodeContext</code></a> 解码的实现。这些用在包含 <code>rustc_metadata::rmeta::Lazy</code> 的类型中。</li>
+<li><code>TyEncodable</code> 和 <code>TyDecoder</code> 生成适用于任意 <code>TyEncoder</code> 或 <code>TyDecoder</code> 的实现。这些仅用于 crate 元数据和/或增量缓存中序列化类型，<code>rustc_middle</code> 中大多数是可序列化类型。</li>
+</ul>
+<h2><a class="header" href="#shorthands" id="shorthands">Shorthands</a></h2>
+<p><code>Ty</code> 可以深度递归，如果每个 <code>Ty</code> 被编码会导致 crate 元数据变的非常大。为解决这个问题，每个 <code>TyEncoder</code> 的输出中都有序列化类型的位置缓存。如果要编码的类型在缓存中，则编码写入文件的字节偏移量，而不是像通常那样的序列化类型。类似的方案用于 <code>ty::Predicate</code>。</p>
+<h2><a class="header" href="#lazyt" id="lazyt"><code>Lazy&lt;T&gt;</code></a></h2>
+<p>在创建 <code>TyCtxt&lt;'tcx&gt;</code> 之前先加载 crate 元数据，因此一些反序列化需要推迟到元数据的初始化载入。<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_metadata/rmeta/struct.Lazy.html"><code>Lazy&lt;T&gt;</code></a> 类型将(相对)偏移量包装在了已序列化的 <code>T</code> 的 crate 元数据中。</p>
+<p><code>Lazy&lt;[T]&gt;</code> 和 <code>Lazy&lt;Table&lt;I, T&gt;&gt;</code> 类型提供了一些功能 <code>Lazy&lt;Vec&lt;T&gt;&gt;</code> 和 <code>Lazy&lt;HashMap&lt;I, T&gt;&gt;</code> :</p>
+<ul>
+<li>可以直接从迭代器编码 <code>Lazy&lt;[T]&gt;</code>，无需事先收集到 <code>Vec&lt;T&gt;</code> 中。</li>
+<li>索引到 <code>Lazy&lt;Table&lt;I, T&gt;&gt;</code> 不需要解码除正在读取条目以外的条目。</li>
+</ul>
+<p><strong>注意</strong>: 不缓存 <code>Lazy&lt;T&gt;</code> 第一次反序列化后的值。相反，查询系统是缓存这些结果的主要方式。</p>
+<h2><a class="header" href="#specialization" id="specialization">Specialization</a></h2>
+<p>少数类型，特别是 <code>DefId</code>，针对不同的 <code>Encoder</code> 需要采用不同的实现。目前，这是通过 ad-hoc 专门处理:
+<code>DefId</code> 有一个 <code>default</code> 实现 <code>Encodable&lt;E&gt;</code> 和一个专有的 <code>Encodable&lt;CacheEncoder&gt;</code>。</p>
 <h1><a class="header" href="#parallel-compilation" id="parallel-compilation">Parallel Compilation</a></h1>
 <h1><a class="header" href="#rustdoc-2" id="rustdoc-2">Rustdoc</a></h1>
 <h1><a class="header" href="#第三部分源码表示" id="第三部分源码表示">第三部分：源码表示</a></h1>
@@ -1048,9 +1462,263 @@ rustc_interface::run_compiler(config, |compiler| {
 let diagnostics = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
 <span class="boring">}
 </span></code></pre></pre>
-<h1><a class="header" href="#syntax-and-the-ast" id="syntax-and-the-ast">Syntax and the AST</a></h1>
-<h1><a class="header" href="#lexing-and-parsing" id="lexing-and-parsing">Lexing and Parsing</a></h1>
-<h1><a class="header" href="#macro-expansion" id="macro-expansion">Macro expansion</a></h1>
+<h1><a class="header" href="#语法和-ast" id="语法和-ast">语法和 AST</a></h1>
+<p>直接使用源代码（source code）是非常不方便的和容易出错的，因此在我们做任何事之前，我们需要将源代码（raw source code）转换成抽象语法树（AST）。事实证明，即使我们这样做，仍需要做大量的工作，包括包括词法分析（lexing），解析（parsing），宏展开（macro expansion），名称解析（name resolution），条件编译（conditional compilation），功能门检查（feature-gate checking）和抽象语法树的验证（validation of the AST）。在这一章，我们来看一看所有这些步骤。</p>
+<p>值得注意的是，这些工作之间并不总是有明确顺序的。例如，宏展开（macro expansion）依赖于名称解析（name resolution）来解析宏和导入的名称。解析（parsing）需要宏展开（macro expansion），这又可能需要解析宏的输出（output of the macro）。</p>
+<h1><a class="header" href="#分析lexing和解析parsing" id="分析lexing和解析parsing">分析（lexing）和解析（parsing）</a></h1>
+<!-- date: 2021-01 --> 2021年一月，词法分析器（lexer）和解析器（parser）正在进行重构， 以允许将它们提取到库（libraries）中。
+<p>编译器要做的第一件事是将程序（Unicode字符）转换为比字符串更方便编译器使用的内容。这发生在词法分析（lexing）和解析（parsing）阶段。</p>
+<p>词法分析（lexing）接受字符串并将其转换成  <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/token/index.html">tokens</a> 流（streams of tokens）。例如，
+<code>a.b + c</code> 会被转换成 tokens <code>a</code>, <code>.</code>, <code>b</code>, <code>+</code>, <code>c</code> 。该词法分析器（lexer）位于 
+[<code>rustc_lexer</code>] 中。</p>
+<p>解析（Parsing）接受 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/token/index.html">tokens</a> 流（streams of tokens）并将其装换位结构化的形式，这对于编译器来说更加容易使用，通常成为抽象语法树(<a href="https://en.wikipedia.org/wiki/Abstract_syntax_tree"><em>Abstract
+Syntax Tree</em></a>,AST)。AST 镜像内存中的Rust 程序的结构（structure），使用 <code>Span</code> 将特定的 AST 节点链接（link）回其源文本。</p>
+<p>在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/index.html"><code>rustc_ast</code></a> 中定义了 AST ,此外还有一些关于 tokens 和 tokens 流（tokens and token streams）的定义，用于变异的（mutating） ASTs 数据结构/特征（traits），以及用于编译器的其他 AST 相关部分的共享定义（如词法分析器和宏扩张）。</p>
+<p>解析器（parser）是在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/index.html"><code>rustc_parse</code></a> 中定义的，以及词法分析器（lexer）的高级接口和在宏展开后运行的一些验证例行程序。特别是，<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/parser/index.html"><code>rustc_parse::parser</code></a> 包含了解析器（parser）的实现</p>
+<p>解析器的主入口是通过各种在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/index.html">parser crate</a> 中的<code>parse_*</code>函数和其他函数。它们允许你将<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/struct.SourceFile.html"><code>SourceFile</code></a>（例如单个文件的源文件）转换为 token 流（token stream ），从 token 流（token stream ）创建解析器（parser），然后执行解析器（parser）去获得一个<code>Crate</code>（AST 的 root 节点）</p>
+<p>为了减少复制的次数，<code>StringReader</code> 和 <code>Parser</code> 的生命周期都绑定到父节点 <code>ParseSess</code>。它包含了解析时所需要的所有信息以及 <code>SourceMap</code> 本身。</p>
+<p>注意，在解析时，我们可能遇到宏定义或调用，我们把这些放在一旁以进行展开 (见 <a href="./macro-expansion.html">本章</a>)。展开本身可能需要解析宏的输出，这可能会涉及到更多需要展开的宏，等等。</p>
+<h2><a class="header" href="#更多源于词法分析lexical-analysis" id="更多源于词法分析lexical-analysis">更多源于词法分析（Lexical Analysis）</a></h2>
+<p>词法分析的代码被分为两个箱子（crates）：</p>
+<ul>
+<li>
+<p><code>rustc_lexer</code> crate 负责将 <code>&amp;str</code> 分解为组成标记的块。将分析器（lexer）作为生成的有限状态机来实现是很流行的，但<code>rustc_lexer</code>重的分析器（lexer）是手写的。</p>
+</li>
+<li>
+<p>来自于 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/index.html"><code>rustc_ast</code></a> 的 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/lexer/struct.StringReader.html"><code>StringReader</code></a> 将 <code>rustc_lexer</code> 与 <code>rustc</code> 详细的数据结构集成在一起。具体来说，它将 <code>Span</code> 信息添加到  <code>rustc_lexer</code> 和 interns 标识符返回的 tokens 中。</p>
+</li>
+</ul>
+<h1><a class="header" href="#宏展开" id="宏展开">宏展开</a></h1>
+<!-- toc -->
+<blockquote>
+<p><code>rustc_ast</code>, <code>rustc_expand</code>, 和 <code>rustc_builtin_macros</code> 都在重构中，所以本章节中的部分链接可能会打不开。</p>
+</blockquote>
+<p>Rust 有一个非常强大的宏系统。在之前的章节中，我们了解了解析器（parser）如何预留要展开的宏（使用临时的<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/placeholders/index.html">占位符</a> ）。这个章节将介绍迭代地展开这些宏的过程，直到我们的 crate 会有一个完整的 AST，且没有任何未展开的宏（或编译错误）。</p>
+<p>首先，我们将讨论宏展开和集成并输出到 ASTs 中的算法。随后，我们将看到健全的（hygiene）数据是如何被收集的。最后，我们将研究展开不同种类宏的细节。</p>
+<p>非常多的算法和数据结构都在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/index.html"><code>rustc_expand</code></a> 中，基础数据结构在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/base/index.html"><code>rustc_expand::base</code></a> 中。</p>
+<p>还要注意的是，<code>cfg</code> 和 <code>cfg_attr</code> 是其他宏中被特殊处理的，并在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/config/index.html"><code>rustc_expand::config</code></a> 中处理。</p>
+<h2><a class="header" href="#展开和-ast-集成" id="展开和-ast-集成">展开和 AST 集成</a></h2>
+<p>首先，展开是发生在 crate 层面。给定一个 crate 的原始代码，编译器将生成一个包含所有宏展开、所有模块内联、等的巨大的 AST。这个过程的主要入口是在  <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/expand/struct.MacroExpander.html#method.fully_expand_fragment"><code>MacroExpander::fully_expand_fragment</code></a> 方法中。除了少数例外情况，我们整个 crate 上都使用这个方法（获得更详细的关于边缘案例的扩展的讨论，请参考 <a href="macro-expansion.html#eager-expansion">&quot;eager-expansion&quot;</a>，）。</p>
+<p>在更高层次上，<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/expand/struct.MacroExpander.html#method.fully_expand_fragment"><code>fully_expand_fragment</code></a> 在迭代（反复）运行的，我们将保留一个未解析的宏调用队列（即尚未找到定义的宏）。我们反复地在队列中选择一个宏，对其进行解析，扩展，并将其集成回去。如果我们无法在迭代中取得进展，这代表着存在编译错误。算法如下 <a href="https://github.com/rust-lang/rust/pull/53778#issuecomment-419224049">algorithm</a>:</p>
+<ol start="0">
+<li>初始化一个队列（<code>queue</code>）用于保存未解析的宏调用。</li>
+<li>反复直到队列（<code>queue</code>）晴空（或者没有任何进展，即有错误）
+<ol start="0">
+<li>尽可能地在我们已部分构建的 create 中<a href="./name-resolution.html">解析（Resolve）</a>  导入（imports）。</li>
+<li>从我们部分已构建的  crate （类似方法、属性、派生）中尽可能多得收集宏<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/expand/struct.Invocation.html"><code>调用</code></a>，并将它们添加到队列中。</li>
+<li>将第一元素从队列中取出，并尝试解析它。</li>
+<li>如果它被成功解析：
+<ol start="0">
+<li>
+<p>运行宏扩展器（macro's expander）函数，该函数消费（consumes）一个 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/tokenstream/struct.TokenStream.html"><code>TokenStream</code></a> 或 AST 并生成一个 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/tokenstream/struct.TokenStream.html"><code>TokenStream</code></a>或 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/expand/enum.AstFragment.html"><code>AstFragment</code></a> (取决于宏的种类). (<code>TokenStream</code>是一个<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/tokenstream/enum.TokenTree.html"><code>TokenTree</code>s</a> 的集合，
+每一个都是一个 token （标点、标识符或文字）或被分隔的组合（在<code>()</code>/<code>[]</code>/<code>{}</code>中的任何内容）
+现在，我们以及知道了宏本身的一切，并且可以调用 <code>set_expn_data</code> 去填满全局数据重的属性；这是与 <code>ExpnId</code> 相关的 hygiene data 。（见<a href="macro-expansion.html#hygiene-and-hierarchies">下文&quot;hygiene&quot;章节</a>）</p>
+</li>
+<li>
+<p>将 AST 集成到一个现有的大型的 AST 中。从本质上讲，这是“类似 token 的块” 变成适当的固定的 AST 并带有 side-tables。
+它的发生过程如下：</p>
+<ul>
+<li>如果宏产生 tokens（例如 proc macro），我们将其解析为 AST ，这可能会产生解析错误。</li>
+<li>在展开的过程中，我们构建  <code>SyntaxContext</code>s (hierarchy 2). （见<a href="macro-expansion.html#hygiene-and-hierarchies">下文&quot;hygiene&quot;章节</a>）</li>
+<li>这三个过程在每个刚从宏展开的 AST 片段上依次地发生：
+<ul>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/node_id/struct.NodeId.html"><code>NodeId</code></a>s 由<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/expand/struct.InvocationCollector.html"><code>InvocationCollector</code></a> 分配的。这还会从新的 AST 片段中收集新的宏调用，并将它们添加到队列中。</li>
+<li><a href="https://rustc-dev-guide.rust-lang.org/hir.html?highlight=def,path#identifiers-in-the-hir">&quot;Def paths&quot;</a> 被创建，同时 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/def_id/struct.DefId.html"><code>DefId</code></a>s 由
+<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_resolve/def_collector/struct.DefCollector.html"><code>DefCollector</code></a> 分配的。</li>
+<li>名字由 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_resolve/build_reduced_graph/struct.BuildReducedGraphVisitor.html"><code>BuildReducedGraphVisitor</code></a> 放入模块中（从解析器（resolver's）的角度来看）。</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>
+<p>在展开单个宏并集成输出后，继续执行
+<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/expand/struct.MacroExpander.html#method.fully_expand_fragment"><code>fully_expand_fragment</code></a> 的下一个迭代。</p>
+</li>
+</ol>
+</li>
+<li>如果它没有被成功解析：
+<ol start="0">
+<li>将宏放回队列中</li>
+<li>继续下一个迭代。</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+<h3><a class="header" href="#错误恢复" id="错误恢复">错误恢复</a></h3>
+<p>如果我们在一次迭代中没有取得任何进展，那么我们就遇到了编译错误(例如一个未定义的宏或导入)。为了进行诊断，我们尝试从错误(未解析的宏或导入)中恢复。这允许编译在第一个错误之后继续进行，这样我们就可以一次报告更多错误。恢复不能使得编译通过。我们知道在这一节点上它会失败。恢复是通过将未成功解析的宏展开为 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/ast/enum.ExprKind.html#variant.Err"><code>ExprKind::Err</code></a> 来实现的。</p>
+<h3><a class="header" href="#名称解析" id="名称解析">名称解析</a></h3>
+<p>注意，这里涉及到名称解析：我们需要解析上述算法中的导入和宏名。这在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_resolve/macros/index.html"><code>rustc_resolve::macros</code></a> 中完成，它解析宏路径，验证这些解析，并报告各种错误(例如:“未找到”或“找到了，但它不稳定（unstable）”或“预期的x，但发现的y”)。但是，我们还没有尝试解析其他名称。这将在后面发生，我们将在<a href="./name-resolution.html">下一章</a>中看到。</p>
+<h3><a class="header" href="#eager-expansion" id="eager-expansion">Eager Expansion</a></h3>
+<p><em>Eager expansion</em> 代表着我们在展开宏调用之前，先展开宏调用的参数。这仅对少数需要文字的特殊内置宏实现；首先对其中的一些宏展开参数可以获得更流畅的用户体验。作为一个例子，请考虑下属情况：</p>
+<pre><code class="language-rust ignore">macro bar($i: ident) { $i }
+macro foo($i: ident) { $i }
+
+foo!(bar!(baz));
+</code></pre>
+<p>lazy expansion 会首先扩展 <code>foo!</code> ，eager expansion 会扩展 <code>bar!</code>。</p>
+<p>Eager expansion 不是一个普遍的（通用的） Rust 特性（feature）。实现更加普遍的 eager expansion 是具有挑战性的，但是为了用户体验，我们为一些内置宏实现了它（eager expansion）。内置宏是在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_builtin_macros/index.html"><code>rustc_builtin_macros</code></a> 实现，还有一些其他早期的代码生成工具，例如注入标准库的导入或生成测试的工具。在 [<code>rustc_expand::build</code>] 有一些额外的帮助工具来构建 AST 片段（fragments）。Eager expansion 通常执行 lazy (normal) expansion 来展开子集。它是通过只在一个部分的 crate 的上来调用 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/expand/struct.MacroExpander.html#method.fully_expand_fragment"><code>fully_expand_fragment</code></a> 来完成的。（与我们通常使用整个 crate 来调用相反）。</p>
+<h3><a class="header" href="#其他数据结构" id="其他数据结构">其他数据结构</a></h3>
+<p>以下是涉及到扩展和扩展的其他重要数据结构</p>
+<ul>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/base/trait.ResolverExpand.html"><code>ResolverExpand</code></a> - 一个用来阻隔（break）crate 的依赖的 trait。这允许解析服务在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/index.html"><code>rustc_ast</code></a> 中使用，虽然 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_resolve/index.html"><code>rustc_resolve</code></a> 和 几乎所有其他的东西都依赖于 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/index.html"><code>rustc_ast</code></a> 。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/base/struct.ExtCtxt.html"><code>ExtCtxt</code></a>/<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/base/struct.ExpansionData.html"><code>ExpansionData</code></a> - 用来保存在处理过程中各种中间数据。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/base/enum.Annotatable.html"><code>Annotatable</code></a> - 可以作为属性目标的 AST 片段。几乎和 AstFragment 相同，除了类型和可以由宏生成但不能用属性注释。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/base/trait.MacResult.html"><code>MacResult</code></a> - 一个“多态的” AST 片段，可以根据他的 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/expand/enum.AstFragmentKind.html"><code>AstFragmentKind</code></a>（item、expression、pattern）转换成不同的 <code>AstFragment</code>。</li>
+</ul>
+<h2><a class="header" href="#hygiene-和结构层次" id="hygiene-和结构层次">hygiene 和结构层次</a></h2>
+<p>如果您曾使用过 C/C++  预处理器宏，就会知道有一些烦人的、难以调试的陷阱！例如，考虑以下代码：</p>
+<pre><code class="language-c">#define DEFINE_FOO struct Bar {int x;}; struct Foo {Bar bar;};
+
+// Then, somewhere else
+struct Bar {
+    ...
+};
+
+DEFINE_FOO
+</code></pre>
+<p>大多数人都避免这样写 C - 因为他无法通过编译。宏定义的 <code>struct Bar</code> 与代码中的结构 <code>struct Bar</code> 定义冲突。请再考虑以下代码：</p>
+<pre><code class="language-c">#define DO_FOO(x) {\
+    int y = 0;\
+    foo(x, y);\
+    }
+
+// Then elsewhere
+int y = 22;
+DO_FOO(y);
+</code></pre>
+<p>你看到任何问题了吗？我们想去生成调用  <code>foo(22, 0)</code> 但是我们得到了 <code>foo(0, 0)</code> ，因为在宏中已经定义了 <code>y</code>! </p>
+<p>这两个都是 <em>macro hygiene</em> 问题的例子。 <em>Hygiene</em>  关于如何处理名字定义在宏中。特别是，一个健康的宏系统可以防止由于宏中引入的名称而产生的错误。Rust 宏是卫生的（hygienic），因为不允许编写上述的 bugs。</p>
+<p>在更高层次上，rust 编译器的卫生（hygiene）性是通过跟踪定义（引入）和使用名称的上下文来保证的。然后我们可以根据上下文消除名字的歧义。宏系统未来的迭代将允许宏的编写者更好地控制该上下文。例如宏的编写者可能想在宏调用的上下文中定义（引入）一个新的名称。另一种情况是，宏的编写者只在宏的作用域内使用变量（也就是说在宏的外部不可见）。</p>
+<p>上下文被添加到 AST 节点。所有由宏生成的 AST 节点都附加了上下文。此外，可能还有些具有上下文的节点，例如一些解析语法糖（非宏展开节点被认为只有 root 上下文，将在后面阐述）。这个编译器，我们使用 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/struct.Span.html"><code>rustc_span::Span</code>s</a> 定位代码的位置。这个结构同样有卫生（hygiene）性信息，我们将在后面看到。</p>
+<p>因为宏调用和定义可以是嵌套的，所以节点的语法上下文也必须是有层次的。比如说，如果我们扩展一个宏，有一个宏调用或者定义在生成的输出中，那么语法上下文应该反映出嵌套。</p>
+<p>然而，事实证明，出于不同目的，我们实际上需要跟踪一些类型的上下文。因此一个 crate 的卫生（hygiene）信息不只是由一个而是由三个扩展层次构成的。</p>
+<p>所有层次结构都需要某种 &quot;macro ID&quot; 来标识展开链中的单个元素。这个 ID 是 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/struct.ExpnId.html"><code>ExpnId</code></a>。所有的宏收到一个整数 ID ，当我们发现新的宏调用时，从 0 开始自增。所有层次结构都是从 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/struct.ExpnId.html#method.root"><code>ExpnId::root()</code></a> 开始的（当前层次的父节点）。</p>
+<p><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/index.html"><code>rustc_span::hygiene</code></a> 包含了所有卫生（hygiene）相关的算法（<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_resolve/struct.Resolver.html#method.resolve_crate_root"><code>Resolver::resolve_crate_root</code></a> 中的一些 hacks 在除外）和卫生（hygiene）相关的数据结构，这些结构都保存在全局数据中。</p>
+<p>实际的层次结构存储在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/struct.HygieneData.html"><code>HygieneData</code></a> 中。这是一个全局数据，包含将装修和展开信息，可以从任意的 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/symbol/struct.Ident.html"><code>Ident</code></a> 访问，无需任何上下文。</p>
+<h3><a class="header" href="#展开顺序层次结构" id="展开顺序层次结构">展开顺序层次结构</a></h3>
+<p>第一，层次结构将跟踪展开的顺序，即宏调用出现在另一个宏的输出中。</p>
+<p>在这里，层次结构中的子元素将被标记为“最内层的”，<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/struct.ExpnData.html"><code>ExpnData</code></a> 结构自身包含宏定义和宏调用的属性子集，这些属性是全局可用的。<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/struct.ExpnData.html#structfield.parent"><code>ExpnData::parent</code></a> 在当前层次结构中，跟踪 子节点 -&gt; 父节点的链接。</p>
+<p>例如</p>
+<pre><code class="language-rust ignore">macro_rules! foo { () =&gt; { println!(); } }
+
+fn main() { foo!(); }
+</code></pre>
+<p>在代码中，AST 节点最终会生成以下层次结构。</p>
+<pre><code>root
+    expn_id_foo
+        expn_id_println
+</code></pre>
+<h3><a class="header" href="#宏定义的结构层次" id="宏定义的结构层次">宏定义的结构层次</a></h3>
+<p>第二，层次结构将跟踪宏定义的顺序。即我们展开一个宏，在其输出中出现另一个宏定义。这个层次结构比其他两个结构层次更复杂，更棘手。</p>
+<p><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/struct.SyntaxContext.html"><code>SyntaxContext</code></a>  通过 ID 表示此层次结构中的整个链。<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/struct.SyntaxContextData.html"><code>SyntaxContextData</code></a> 包含了与给定的 
+<code>SyntaxContext</code> 相关的数据；大多数情况下，它是一个缓存，用于以不同方式过滤该链的结果。<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/struct.SyntaxContextData.html#structfield.parent"><code>SyntaxContextData::parent</code></a> 是此处 子节点-&gt; 父节点 的链接，<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/struct.SyntaxContextData.html#structfield.outer_expn"><code>SyntaxContextData::outer_expns</code></a> 是链中的各个元素。“链接运算符”在编译器代码中是<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/struct.SyntaxContext.html#method.apply_mark"><code>SyntaxContext::apply_mark</code></a>。</p>
+<p>上述提到的 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/struct.Span.html"><code>Span</code></a> 实际上只是代码位置和 <code>SyntaxContext</code> 的紧凑表现。同样的，<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/symbol/struct.Ident.html"><code>Ident</code></a> 只是
+<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/symbol/struct.Symbol.html"><code>Symbol</code></a> + <code>Span</code>（即一个被替换的字符串+健全性数据）</p>
+<p>对于内置宏，我们使用 <code>SyntaxContext::empty().apply_mark(expn_id)</code> 上下文，这样的宏是被认为是定义在 root 层次结构纸上。我们为 proc-macros 做一样的事，因为我们还没有实现跨 crate 并保证其卫生（hygiene）。</p>
+<p>如果 token 在宏生成之前有上下文 <code>X</code> ，那么在宏生成后上下文会有 <code>X -&gt; macro_id</code>。以下是一些例子：</p>
+<p>Example 0:</p>
+<pre><code class="language-rust ignore">macro m() { ident }
+
+m!();
+</code></pre>
+<p>这里 <code>ident</code> 有最初的上下文 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/struct.SyntaxContext.html#method.root"><code>SyntaxContext::root()</code></a>。在 <code>m</code> 生成后，<code>ident</code> 会有上下文 <code>ROOT -&gt; id(m)</code>。</p>
+<p>Example 1:</p>
+<pre><code class="language-rust ignore">macro m() { macro n() { ident } }
+
+m!();
+n!();
+</code></pre>
+<p>这个例子中，<code>ident</code> 有最初的 <code>ROOT</code>  ，在第一个宏被展开后上下文变为 <code> ROOT -&gt; id(m)</code> ，继续展开后得到上下文 <code>ROOT -&gt; id(m) -&gt; id(n)</code>。</p>
+<p>Example 2:</p>
+<p>注意，这些链并不完全由他们最后的一个元素决定，换句话来说 <code>ExpnId</code> 和 <code>SyntaxContext</code> 不是同构的。</p>
+<pre><code class="language-rust ignore">macro m($i: ident) { macro n() { ($i, bar) } }
+
+m!(foo);
+</code></pre>
+<p>在所有展开后，<code>foo</code> 有上下文 <code>ROOT -&gt; id(n)</code> ，<code>bar</code> 有上下文
+<code>ROOT -&gt; id(m) -&gt; id(n)</code>。</p>
+<p>最后要提的一点是，目前的结构层次受限于 <a href="https://github.com/rust-lang/rust/pull/51762#issuecomment-401400732">&quot;context transplantation hack&quot;</a> 。基本上，更现代（实现性的）宏（<code>macro</code>） 比旧的 MBE 系统有更强的卫生（hygiene）性，但这可能导致两者之间奇怪的交互。这种 hack 实现是为了让所有事暂时“正常工作”。</p>
+<h3><a class="header" href="#调用的结构层次" id="调用的结构层次">调用的结构层次</a></h3>
+<p>第三也是最后一个，结构层次是跟踪宏调用的位置。</p>
+<p>在结构层次 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/struct.ExpnData.html#structfield.call_site"><code>ExpnData::call_site</code></a> 中是 子节点 -&gt; 父节点 的链接。</p>
+<p>这里有一个例子：</p>
+<pre><code class="language-rust ignore">macro bar($i: ident) { $i }
+macro foo($i: ident) { $i }
+
+foo!(bar!(baz));
+</code></pre>
+<p>对于 <code>baz</code> AST 节点是最后输出的，第一个结构层次是 <code>ROOT -&gt; id(foo) -&gt; id(bar) -&gt; baz</code> ，而第三结构层次是 <code>ROOT -&gt; baz</code>。</p>
+<h3><a class="header" href="#宏回溯" id="宏回溯">宏回溯</a></h3>
+<p>在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/index.html"><code>rustc_span</code></a> 中实现了宏回溯，其使用了 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/hygiene/index.html"><code>rustc_span::hygiene</code></a> 的健全机制。</p>
+<h2><a class="header" href="#产生宏输出" id="产生宏输出">产生宏输出</a></h2>
+<p>上述内容中我们看到了中的宏的输出如何被集成到用于 crate 的 AST 中，我们还看到了如何为一个 crate 生成卫生（hygiene）数据。但是我们如何实际产生一个宏的输出呢？这将取决于宏的类型。</p>
+<p>Rust 中有两种类型的宏：<code>macro_rules!</code> 类型（或称 示例宏（ Macros By Example,MBE））和过程宏（procedural macros）（或 proc macros;包括自定义派生）。在解析阶段，正常的 Rust 解析器将保留宏及其调用内容。稍后将使用这部分代码将宏展开。</p>
+<p>这里有一些重要的数结构和接口：</p>
+<ul>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/base/struct.SyntaxExtension.html"><code>SyntaxExtension</code></a> - 一个更底层的宏表示，包含了它扩展函数，他将一个 token 流（<code>TokenStream</code>）或 AST 转换成另一个 <code>TokenStream</code> 或 AST 加上一些额外信息，例如稳定性，或在宏内允许使用的不稳定特性的列表。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/base/enum.SyntaxExtensionKind.html"><code>SyntaxExtensionKind</code></a> - 展开方法可能会有很多不同的函数签名（接受一个 token 流，或者两个；或者接受一部分 AST 等等）。这是一个列出他们的枚举。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/base/trait.ProcMacro.html"><code>ProcMacro</code></a>/<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/base/trait.TTMacroExpander.html"><code>TTMacroExpander</code></a>/<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/base/trait.AttrProcMacro.html"><code>AttrProcMacro</code></a>/<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/base/trait.MultiItemModifier.html"><code>MultiItemModifier</code></a> - traits 用于标识展开函数的签名</li>
+</ul>
+<h2><a class="header" href="#示例宏macros-by-example" id="示例宏macros-by-example">示例宏（Macros By Example）</a></h2>
+<p>MBEs 有自己等等解析器，不同于普通的 Rust 解析器。当宏展开时，我们可以调用 MBE 解析器去解析和展开宏。反过来，MBE 解析器在解析宏调用的内容时需要绑定元变量（例如<code>$my_expr</code>），这可能会调用普通的 Rust 解析器。宏展开的代码在 <a href="https://github.com/rust-lang/rust/tree/master/compiler/rustc_expand/src/mbe"><code>compiler/rustc_expand/src/mbe/</code></a></p>
+<h3><a class="header" href="#示例" id="示例">示例</a></h3>
+<p>有个例子供参考提供是有助的。在本章的其他部分，每当我们提到 &quot;示例 <em>定义</em>&quot; 时，我们指得失以下内容：</p>
+<pre><code class="language-rust ignore">macro_rules! printer {
+    (print $mvar:ident) =&gt; {
+        println!(&quot;{}&quot;, $mvar);
+    };
+    (print twice $mvar:ident) =&gt; {
+        println!(&quot;{}&quot;, $mvar);
+        println!(&quot;{}&quot;, $mvar);
+    };
+}
+</code></pre>
+<p><code>$mvar</code> 是一个 <em>元变量</em> 。与正常的变量不同，元变量不是绑定到计算中的值，而是在 <em>编译时</em> 绑定到 <em>tokens</em> 树。 <em>token</em> 是一个单独的语法“单元”，例如标识符（例 <code>foo</code>）或者标点符号（例 <code>=&gt;</code>）。还有其他特殊的 tokens，例如  <code>EOF</code> 他表示没有其他更多的 tokens。Token 树由类似成对的圆括号的字符(<code>(</code>...<code>)</code>,
+<code>[</code>...<code>]</code>, 和 <code>{</code>...<code>}</code>) - 他们包括了 open 和 close，以及它们之间的所有标记（我们确实要求类似括号的字符需要保持要平衡）。让宏展开操作 token 流而不是源文件的原始字节，从而减少复杂性。宏扩展器（以及编译器的其余大多数）实际上并不十分在乎代码中某些语法构造的确切行和列。它只关心代码中使用了哪些构造。使用 tokens 使得我们可以关心 <em>什么</em> 而不必担心在 <em>哪里</em> ，关于 tokens 跟多内容，可以参考本书 <a href="./the-parser.html">Parsing</a> 一章。</p>
+<p>当我们提到 “示例 <em>调用</em>” ，我们指以下代码片段：</p>
+<pre><code class="language-rust ignore">printer!(print foo); // Assume `foo` is a variable defined somewhere else...
+</code></pre>
+<p>将宏调用展开为语法树的过程 <code>println!(&quot;{}&quot;, foo)</code> ，然后展开成 
+<code>Display::fmt</code> 调用成为 <em>宏展开</em> ，是本章的主题。</p>
+<h3><a class="header" href="#示例宏-mbe-解析器" id="示例宏-mbe-解析器">示例宏 （MBE） 解析器</a></h3>
+<p>MBE 展开包括两个部分：解析定义和解析调用。有趣的是，两者都是由宏解析器完成的。</p>
+<p>基本上，MBE 解析器类似于基于 NFA 的正则解析器。它使用的算法本质上类似于 <a href="https://en.wikipedia.org/wiki/Earley_parser">Earley parsing
+algorithm</a> 。 宏解析器定义在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/mbe/macro_parser"><code>compiler/rustc_expand/src/mbe/macro_parser.rs</code></a>。</p>
+<p>宏解析器的接口如下（稍作简化）：</p>
+<pre><code class="language-rust ignore">fn parse_tt(
+    parser: &amp;mut Cow&lt;Parser&gt;,
+    ms: &amp;[TokenTree],
+) -&gt; NamedParseResult
+</code></pre>
+<p>我们在宏解析器中使用这些项：</p>
+<ul>
+<li><code>parser</code> 是一个对普通 Rust 解析器的引用，包括了 token 流和解析会话（parsing session）。Token 流是我们将请求 MBE 解析器解析的内容。我们将使用原始的 token 流，将元变量绑定到对应的 token 树。解析会话（parsing session）可用于报告解析器错误。</li>
+<li><code>ms</code> 是一个 <em>匹配器</em> 。这是一个 token 树序列，我们希望以此来匹配 token 树。</li>
+</ul>
+<p>类似于正则解析器，token 流是输入，我们将其与 pattern <code>ms</code> 匹配。使用我们的示例，token 流可以是包含示例 <em>调用</em> <code>print foo</code> 内部的 token 流，<code>ms</code> 可以是 token（树）<code>print $mvar:ident</code>。</p>
+<p>解析器的输出是 <code>NamedParseResult</code>，它指示发生了三种情况中的哪一种：</p>
+<ul>
+<li>成功：token 流匹配给定的匹配器 <code>ms</code>，并且我们已经产生了从元变量到响应令牌树的绑定。</li>
+<li>失败：token 流与 <code>ms</code> 不匹配。浙江导致出现错误消息，例：“No rule expected token <em>blah</em>”</li>
+<li>错误： 解析器中发生了一些致命的错误。例如，如果存在多个模式匹配，则会发生这种情况，因为这表明宏不明确。</li>
+</ul>
+<p>所有的接口定义在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/mbe/macro_parser/fn.parse_tt.html">这里</a>。</p>
+<p>宏解析器的工作与普通的正则解析器几乎相同，只有一个例外：为了解析不通的元变量，例如<code>ident</code>, <code>block</code>, <code>expr</code> 等，宏解析器有时候必须回调到普通的 Rust 解析器。</p>
+<p>如上所述，宏的定义和调用都使用宏解析器进行解析。这是非常不直观和自引用的。
+解析宏的代码定义在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/mbe/macro_rules"><code>compiler/rustc_expand/src/mbe/macro_rules.rs</code></a> 中。它定义用于匹配宏定义模式为 <code>$( $lhs:tt =&gt; $rhs:tt );+</code> 。换句话说，一个 <code>macro_rules</code> 定义在其主体中应最少出现一个 token 树，后面跟着 <code>=&gt;</code>，然后是另一个 token 树。当编译器遇到 <code>macro_rules</code> 定义时，它使用这个模式来匹配定义中每个规则的两个 token 树， <em>并使用宏解析器本身</em> 。在示例定义中，元变量 <code>$lhs</code> 将会匹配 partten <code>(print $mvar:ident)</code> 和 <code>(print twice $mvar:ident)</code>。 <code>$rhs</code> 将匹配 <code>{ println!(&quot;{}&quot;, $mvar); }</code> 和 <code>{ println!(&quot;{}&quot;, $mvar); println!(&quot;{}&quot;, $mvar); }</code> partten 的主体。解析器将保留这些内容，以便在需要展开宏调用时使用。</p>
+<p>当编译器遇到宏调用时，它会使用上述基于 NFA 的宏解析器解析该调用。但是，使用的匹配器是从宏定义的 arms 中提取的第一个 token 树（<code>$lhs</code> ），使用我们的示例，我们尝试匹配 token 流中的 <code>print foo</code> （来自匹配器的） <code>print $mvar:ident</code> 和从前面定义中提取的 <code>print twice $mvar:ident</code>。算法是完全相同的，但是当宏解析器在当前匹配其中需要匹配非 <em>non-terminal</em>  (例如 <code>$mvar:ident</code>) 时，它会回调正常的 Rust 解析器以获取该非终结符的内容。这种情况下，Rust 会寻找一个 <code>ident</code> token，它会找到 <code>foo</code> 并返回给宏解析器。然后，宏解析器照常进行解析。另外，请注意来自于不同 arms 的匹配器应该恰好有一个匹配调用；如果有多个匹配项，则该解析有二义性，而如果根本没有匹配项，则存在语法错误。</p>
+<p>跟多关于解析器实现的信息请参考 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/mbe/macro_parser"><code>compiler/rustc_expand/src/mbe/macro_parser.rs</code></a></p>
+<h3><a class="header" href="#macros-and-macros-20" id="macros-and-macros-20"><code>macro</code>s and Macros 2.0</a></h3>
+<p>改进 MBE 系统，为它提供更多与卫生（hygiene）性相关的功能，更好的范围和可见性规则等，这是一个古老的，几乎没有文献记载的工作。不幸的是，最近在这方面还没有进行很多工作。 在内部，宏使用与当今的 MBE 相同的机制。 它们只是具有附加的语法糖，并且允许在名称空间中使用。</p>
+<h2><a class="header" href="#过程procedural宏" id="过程procedural宏">过程（Procedural）宏</a></h2>
+<p>如上所述，过程宏也在解析过程中进行了扩展。 但是，它们使用了一种完全不同的机制。 过程宏不是作为编译器中的解析器，而是作为自定义的第三方 crate 实现的。 编译器将在其中编译 proc macro crate 和带有特殊注释的函数（即 proc macro 本身），并向它们传递 tokens 流。</p>
+<p>然后 proc macro 可以转换 token 流和输出新的 token 流，该 token 流被合称为 AST。</p>
+<p>值得注意的是，proc macros 使用的 token 流类型是 <em>稳定的</em> ，因此<code>rustc</code> 不在内部使用它（因为内部数据结构是不稳定的）。 像以前一样，编译器的 token 流为 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/tokenstream/struct.TokenStream.html"><code>rustc_ast::tokenstream::TokenStream</code></a>。 这将转换为稳定的 <a href="https://doc.rust-lang.org/proc_macro/struct.TokenStream.html"><code>proc_macro::TokenStream</code></a> 并返回 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/proc_macro/index.html"><code>rustc_expand::proc_macro</code></a> 和<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_expand/proc_macro_server/index.html"><code>rustc_expand::proc_macro_server</code></a> 。 因为 Rust ABI 不稳定，所以我们使用 C ABI 进行转换。</p>
+<p>TODO: more here.</p>
+<h3><a class="header" href="#custom-derive" id="custom-derive">Custom Derive</a></h3>
+<p>自定义派生是 proc macro 的一种特殊类型。 </p>
+<p>TODO: more?</p>
 <h1><a class="header" href="#name-resolution" id="name-resolution">Name resolution</a></h1>
 <h1><a class="header" href="#test-implementation" id="test-implementation">#[test] Implementation</a></h1>
 <h1><a class="header" href="#panic-implementation" id="panic-implementation">Panic Implementation</a></h1>
@@ -1119,7 +1787,105 @@ body 与一个<strong>所有者</strong>相关联，“所有者”通常是某�
 <h1><a class="header" href="#mir-visitor-and-traversal" id="mir-visitor-and-traversal">MIR visitor and traversal</a></h1>
 <h1><a class="header" href="#mir-passes-getting-the-mir-for-a-function" id="mir-passes-getting-the-mir-for-a-function">MIR passes: getting the MIR for a function</a></h1>
 <h1><a class="header" href="#identifiers-in-the-compiler" id="identifiers-in-the-compiler">Identifiers in the Compiler</a></h1>
-<h1><a class="header" href="#closure-expansion" id="closure-expansion">Closure expansion</a></h1>
+<h1><a class="header" href="#rustc中的闭包扩展" id="rustc中的闭包扩展">rustc中的闭包扩展</a></h1>
+<p>这一节描述了rustc是如何处理闭包的。Rust中的闭包实际上沦为了来自其创建者栈帧的结构体，该结构体包含了他们使用的值（或使用值的引用）。rustc的工作是要弄清楚闭包使用了哪些值，以及是如何使用的，这样他就可以决定是通过共享引用，可变引用还是通过移动来捕获给定的变量。rustc也需要弄清楚闭包能够实现哪种闭包特征(<a href="https://doc.rust-lang.org/std/ops/trait.Fn.html"><code>Fn</code></a>，<a href="https://doc.rust-lang.org/std/ops/trait.FnMut.html"><code>FnMut</code></a>，或<a href="https://doc.rust-lang.org/std/ops/trait.FnOnce.html"><code>FnOnce</code></a>)。</p>
+<p>让我们来从一个小例子开始:</p>
+<h3><a class="header" href="#示例-1" id="示例-1">示例 1</a></h3>
+<p>首先，让我们来看一下以下示例中的闭包是如何实现的：</p>
+<pre><pre class="playground"><code class="language-rust">fn closure(f: impl Fn()) {
+    f();
+}
+
+fn main() {
+    let x: i32 = 10;
+    closure(|| println!(&quot;Hi {}&quot;, x));  // 闭包仅仅读取了x变量.
+    println!(&quot;Value of x after return {}&quot;, x);
+}
+</code></pre></pre>
+<p>假设上面是名为<code>immut.rs</code>文件的内容。如果我们用以下的命令来编译<code>immut.rs</code>，<a href="./mir/passes.html"><code>-Z dump-mir=all</code></a>参数将会使<code>rustc</code>生成<a href="./mir/index.html">MIR</a>并将其转储到<code>mir_dump</code>目录中。</p>
+<pre><code class="language-console">&gt; rustc +stage1 immut.rs -Z dump-mir=all
+</code></pre>
+<p>在我们执行了这个命令之后，我们将会看到在当前的工作目录下生成了一个名为<code>mir_dump</code>的新目录，其中包含了多个文件，如果我们打开<code>rustc.main.-------.mir_map.0.mir</code>文件将会发现，除了其他内容外，还包括此行：</p>
+<pre><code class="language-rust ignore">_4 = &amp;_1;
+_3 = [closure@immut.rs:7:13: 7:36] { x: move _4 };
+</code></pre>
+<p>请注意在这节的MIR示例中，<code>_1</code>就是<code>x</code>。</p>
+<p>在第一行<code>_4 = &amp;_1;</code>中，<code>mir_dump</code>告诉我们<code>x</code>作为不可变引用被借用了。这是我们希望的，因为我们的闭包需要读取<code>x</code>。</p>
+<h3><a class="header" href="#示例-2" id="示例-2">示例 2</a></h3>
+<p>这里是另一个示例：</p>
+<pre><pre class="playground"><code class="language-rust">fn closure(mut f: impl FnMut()) {
+    f();
+}
+
+fn main() {
+    let mut x: i32 = 10;
+    closure(|| {
+        x += 10;  // The closure mutates the value of x
+        println!(&quot;Hi {}&quot;, x)
+    });
+    println!(&quot;Value of x after return {}&quot;, x);
+}
+</code></pre></pre>
+<pre><code class="language-rust ignore">_4 = &amp;mut _1;
+_3 = [closure@mut.rs:7:13: 10:6] { x: move _4 };
+</code></pre>
+<p>这一次，在第一行<code>_4 = &amp;mut _1;</code>中，我们可以看到借用变成了可变借用。这是十分合理的，使得闭包可以将<code>x</code>加10。</p>
+<h3><a class="header" href="#示例-3" id="示例-3">示例 3</a></h3>
+<p>又一个示例：</p>
+<pre><pre class="playground"><code class="language-rust">fn closure(f: impl FnOnce()) {
+    f();
+}
+
+fn main() {
+    let x = vec![21];
+    closure(|| {
+        drop(x);  // 在这之后使x不可用
+    });
+    // println!(&quot;Value of x after return {:?}&quot;, x);
+}
+</code></pre></pre>
+<pre><code class="language-rust ignore">_6 = [closure@move.rs:7:13: 9:6] { x: move _1 }; // bb16[3]: scope 1 at move.rs:7:13: 9:6
+</code></pre>
+<p>这里, <code>x</code>直接被移入了闭包内，因此在闭包代码块之后将不允许访问这个变量了。</p>
+<h2><a class="header" href="#编译器中的推断" id="编译器中的推断">编译器中的推断</a></h2>
+<p>现在，让我们深入研究rustc的代码，看看编译器是如何完成所有这些推断的。</p>
+<p>首先，我们先定义一个术语<em>upvar</em>，它在我们之后的讨论中会经常使用到。<strong>upvar</strong>是定义闭包的函数的本地变量。所以，在上述示例中，<strong>x</strong>对于闭包来说是一个upvar。它们有时也会被称为<em>空闲变量</em>以表示它们并未绑定到闭包的上下文中。<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/query/queries/struct.upvars_mentioned.html"><code>compiler/rustc_middle/src/ty/query/mod.rs</code></a>为此定义了一个被成为<em>upv.rs_mentioned</em>的查询。 </p>
+<p>除了懒调用，另一个将闭包区别于普通函数的特征就是它可以从上下文中借用这些upvar；因此编译器必须确定upvar的借用类型。基于这个用途，编译器从分配一个不可变的借用类型开始，可以根据需要来减少限制（将它从<strong>不可变</strong>变成<strong>可变</strong>，再变成<strong>移动</strong>）。 在上述的示例1中，闭包仅仅将变量用于打印，而不以任何方式对其进行修改，因此在<code>mir_dump</code>中，我们发现借用类型的upvar变量<code>x</code>是不可变的。但是，在示例2中，闭包修改了<code>x</code>并将其加上了某个值。由于这种改变，编译器从将<code>x</code>分配为不可变的引用类型开始，必须将其调整为可变的引用。同样的，在示例3中，闭包释放了向量<code>x</code>，因此要求将变量<code>x</code>移入闭包内。依赖于借用类型，闭包需要实现合适的特征：<code>Fn</code>特征对应不可变借用, <code>FnMut</code>对应可变借用，<code>FnOnce</code>对应于移动语义。</p>
+<p>大多数与闭包相关的代码在<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/check/upvar/index.html"><code>compiler/rustc_typeck/src/check/upvar.rs</code></a>文件中，数据结构定义在<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/index.html"><code>compiler/rustc_middle/src/ty/mod.rs</code></a>文件中。</p>
+<p>在我们进一步深入之前，一起讨论下如何通过rustc代码库来检测控制流。对于闭包来说，像下面一样设置<code>RUST_LOG</code>环境变量并在文件中收集输出。</p>
+<pre><code class="language-console">&gt; RUST_LOG=rustc_typeck::check::upvar rustc +stage1 -Z dump-mir=all \
+    &lt;.rs file to compile&gt; 2&gt; &lt;file where the output will be dumped&gt;
+</code></pre>
+<p>这里使用了stage1编译器，并为<code>rustc_typeck::check::upvar</code>模块启用了<code>debug!</code>日志。</p>
+<p>另一种选择是使用lldb或gdb逐步执行代码。</p>
+<ol>
+<li><code>rust-lldb build/x86_64-apple-darwin/stage1/bin/rustc test.rs</code></li>
+<li>在lldb中：
+<ol>
+<li><code>b upvar.rs:134</code>  // 在upvar.rs文件中的某行上设置断点</li>
+<li><code>r</code>  // 一直运行程序直到打到了该断点上</li>
+</ol>
+</li>
+</ol>
+<p>让我们从<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/check/upvar/index.html"><code>upvar.rs</code></a>开始. 这个文件有一个叫<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/expr_use_visitor/struct.ExprUseVisitor.html"><code>euv::ExprUseVisitor</code></a>的结构，该结构遍历闭包的源码并为每一个被借用，被更改，被移动的upvar触发了一个回调。</p>
+<pre><pre class="playground"><code class="language-rust">fn main() {
+    let mut x = vec![21];
+    let _cl = || {
+        let y = x[0];  // 1.
+        x[0] += 1;  // 2.
+    };
+}
+</code></pre></pre>
+<p>在上面的示例中，我们的访问器将会调用两次，对于标记了1和2的代码行，一个用于共享借用，另一个用于可变借用。它还会告诉我们借用了什么。</p>
+<p>通过实现<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/expr_use_visitor/trait.Delegate.html"><code>Delegate</code></a>特征来定义回调。<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/check/upvar/struct.InferBorrowKind.html"><code>InferBorrowKind</code></a>类型实现了<code>Delegate</code>并维护了一个map来记录每个upvar需要哪种捕获方式。捕获的方式可以是<code>ByValue</code>（被移动）或者是<code>ByRef</code>（被借用）。对于<code>ByRef</code>借用，<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/enum.BorrowKind.html"><code>BorrowKind</code></a>可能是定义在<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/index.html"><code>compiler/rustc_middle/src/ty/mod.rs</code></a>中的<code>ImmBorrow</code>，<code>UniqueImmBorrow</code>，<code>MutBorrow</code>。</p>
+<p><code>Delegate</code>定义了一些不同的方法（不同的回调）：
+<strong>consume</strong>方法用于<em>移动</em>变量，<strong>borrow</strong>方法用于某种（共享的或可变的）借用，而当我们看到某种事物的分配时，则调用<strong>mutate</strong>方法。</p>
+<p>所有的这些回调都有一个共同的参数<em>cmt</em>，该参数代表类别，可变形和类型。他定义在<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/mem_categorization/index.html"><code>compiler/rustc_middle/src/middle/mem_categorization.rs</code></a>中。代码注释中写到：“<code>cmt</code>是一个值的完整分类，它指明了该值的起源和位置，以及存储该值的内存的可变性”。根据这些回调（consume，borrow等），我们将会调用相关的<code>adjust_upvar_borrow_kind_for_&lt;something&gt;</code>并传递<code>cmt</code>。一旦借用类型有了调整，我们将它存储在表中，基本上说明了每个闭包都借用了什么。</p>
+<pre><code class="language-rust ignore">self.tables
+    .borrow_mut()
+    .upvar_capture_map
+    .extend(delegate.adjust_upvar_captures);
+</code></pre>
 <h1><a class="header" href="#the-ty-module-representing-types" id="the-ty-module-representing-types">The ty module: representing types</a></h1>
 <h1><a class="header" href="#generics-and-substitutions" id="generics-and-substitutions">Generics and substitutions</a></h1>
 <h1><a class="header" href="#typefolder-and-typefoldable" id="typefolder-and-typefoldable">TypeFolder and TypeFoldable</a></h1>
@@ -1129,7 +1895,7 @@ body 与一个<strong>所有者</strong>相关联，“所有者”通常是某�
 <h1><a class="header" href="#early-and-late-bound-parameters" id="early-and-late-bound-parameters">Early and Late Bound Parameters</a></h1>
 <h1><a class="header" href="#higher-ranked-trait-bounds" id="higher-ranked-trait-bounds">Higher-ranked trait bounds</a></h1>
 <h1><a class="header" href="#caching-subtleties" id="caching-subtleties">Caching subtleties</a></h1>
-<h1><a class="header" href="#specialization" id="specialization">Specialization</a></h1>
+<h1><a class="header" href="#specialization-1" id="specialization-1">Specialization</a></h1>
 <h1><a class="header" href="#chalk-based-trait-solving" id="chalk-based-trait-solving">Chalk-based trait solving</a></h1>
 <h1><a class="header" href="#lowering-to-logic" id="lowering-to-logic">Lowering to logic</a></h1>
 <h1><a class="header" href="#goals-and-clauses" id="goals-and-clauses">Goals and clauses</a></h1>

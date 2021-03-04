@@ -167,7 +167,29 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#lexing-and-parsing" id="lexing-and-parsing">Lexing and Parsing</a></h1>
+                        <h1><a class="header" href="#分析lexing和解析parsing" id="分析lexing和解析parsing">分析（lexing）和解析（parsing）</a></h1>
+<!-- date: 2021-01 --> 2021年一月，词法分析器（lexer）和解析器（parser）正在进行重构， 以允许将它们提取到库（libraries）中。
+<p>编译器要做的第一件事是将程序（Unicode字符）转换为比字符串更方便编译器使用的内容。这发生在词法分析（lexing）和解析（parsing）阶段。</p>
+<p>词法分析（lexing）接受字符串并将其转换成  <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/token/index.html">tokens</a> 流（streams of tokens）。例如，
+<code>a.b + c</code> 会被转换成 tokens <code>a</code>, <code>.</code>, <code>b</code>, <code>+</code>, <code>c</code> 。该词法分析器（lexer）位于 
+[<code>rustc_lexer</code>] 中。</p>
+<p>解析（Parsing）接受 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/token/index.html">tokens</a> 流（streams of tokens）并将其装换位结构化的形式，这对于编译器来说更加容易使用，通常成为抽象语法树(<a href="https://en.wikipedia.org/wiki/Abstract_syntax_tree"><em>Abstract
+Syntax Tree</em></a>,AST)。AST 镜像内存中的Rust 程序的结构（structure），使用 <code>Span</code> 将特定的 AST 节点链接（link）回其源文本。</p>
+<p>在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/index.html"><code>rustc_ast</code></a> 中定义了 AST ,此外还有一些关于 tokens 和 tokens 流（tokens and token streams）的定义，用于变异的（mutating） ASTs 数据结构/特征（traits），以及用于编译器的其他 AST 相关部分的共享定义（如词法分析器和宏扩张）。</p>
+<p>解析器（parser）是在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/index.html"><code>rustc_parse</code></a> 中定义的，以及词法分析器（lexer）的高级接口和在宏展开后运行的一些验证例行程序。特别是，<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/parser/index.html"><code>rustc_parse::parser</code></a> 包含了解析器（parser）的实现</p>
+<p>解析器的主入口是通过各种在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/index.html">parser crate</a> 中的<code>parse_*</code>函数和其他函数。它们允许你将<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/struct.SourceFile.html"><code>SourceFile</code></a>（例如单个文件的源文件）转换为 token 流（token stream ），从 token 流（token stream ）创建解析器（parser），然后执行解析器（parser）去获得一个<code>Crate</code>（AST 的 root 节点）</p>
+<p>为了减少复制的次数，<code>StringReader</code> 和 <code>Parser</code> 的生命周期都绑定到父节点 <code>ParseSess</code>。它包含了解析时所需要的所有信息以及 <code>SourceMap</code> 本身。</p>
+<p>注意，在解析时，我们可能遇到宏定义或调用，我们把这些放在一旁以进行展开 (见 <a href="./macro-expansion.html">本章</a>)。展开本身可能需要解析宏的输出，这可能会涉及到更多需要展开的宏，等等。</p>
+<h2><a class="header" href="#更多源于词法分析lexical-analysis" id="更多源于词法分析lexical-analysis">更多源于词法分析（Lexical Analysis）</a></h2>
+<p>词法分析的代码被分为两个箱子（crates）：</p>
+<ul>
+<li>
+<p><code>rustc_lexer</code> crate 负责将 <code>&amp;str</code> 分解为组成标记的块。将分析器（lexer）作为生成的有限状态机来实现是很流行的，但<code>rustc_lexer</code>重的分析器（lexer）是手写的。</p>
+</li>
+<li>
+<p>来自于 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/index.html"><code>rustc_ast</code></a> 的 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_parse/lexer/struct.StringReader.html"><code>StringReader</code></a> 将 <code>rustc_lexer</code> 与 <code>rustc</code> 详细的数据结构集成在一起。具体来说，它将 <code>Span</code> 信息添加到  <code>rustc_lexer</code> 和 interns 标识符返回的 tokens 中。</p>
+</li>
+</ul>
 
                     </main>
 

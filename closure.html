@@ -167,7 +167,105 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#closure-expansion" id="closure-expansion">Closure expansion</a></h1>
+                        <h1><a class="header" href="#rustc中的闭包扩展" id="rustc中的闭包扩展">rustc中的闭包扩展</a></h1>
+<p>这一节描述了rustc是如何处理闭包的。Rust中的闭包实际上沦为了来自其创建者栈帧的结构体，该结构体包含了他们使用的值（或使用值的引用）。rustc的工作是要弄清楚闭包使用了哪些值，以及是如何使用的，这样他就可以决定是通过共享引用，可变引用还是通过移动来捕获给定的变量。rustc也需要弄清楚闭包能够实现哪种闭包特征(<a href="https://doc.rust-lang.org/std/ops/trait.Fn.html"><code>Fn</code></a>，<a href="https://doc.rust-lang.org/std/ops/trait.FnMut.html"><code>FnMut</code></a>，或<a href="https://doc.rust-lang.org/std/ops/trait.FnOnce.html"><code>FnOnce</code></a>)。</p>
+<p>让我们来从一个小例子开始:</p>
+<h3><a class="header" href="#示例-1" id="示例-1">示例 1</a></h3>
+<p>首先，让我们来看一下以下示例中的闭包是如何实现的：</p>
+<pre><pre class="playground"><code class="language-rust">fn closure(f: impl Fn()) {
+    f();
+}
+
+fn main() {
+    let x: i32 = 10;
+    closure(|| println!(&quot;Hi {}&quot;, x));  // 闭包仅仅读取了x变量.
+    println!(&quot;Value of x after return {}&quot;, x);
+}
+</code></pre></pre>
+<p>假设上面是名为<code>immut.rs</code>文件的内容。如果我们用以下的命令来编译<code>immut.rs</code>，<a href="./mir/passes.html"><code>-Z dump-mir=all</code></a>参数将会使<code>rustc</code>生成<a href="./mir/index.html">MIR</a>并将其转储到<code>mir_dump</code>目录中。</p>
+<pre><code class="language-console">&gt; rustc +stage1 immut.rs -Z dump-mir=all
+</code></pre>
+<p>在我们执行了这个命令之后，我们将会看到在当前的工作目录下生成了一个名为<code>mir_dump</code>的新目录，其中包含了多个文件，如果我们打开<code>rustc.main.-------.mir_map.0.mir</code>文件将会发现，除了其他内容外，还包括此行：</p>
+<pre><code class="language-rust ignore">_4 = &amp;_1;
+_3 = [closure@immut.rs:7:13: 7:36] { x: move _4 };
+</code></pre>
+<p>请注意在这节的MIR示例中，<code>_1</code>就是<code>x</code>。</p>
+<p>在第一行<code>_4 = &amp;_1;</code>中，<code>mir_dump</code>告诉我们<code>x</code>作为不可变引用被借用了。这是我们希望的，因为我们的闭包需要读取<code>x</code>。</p>
+<h3><a class="header" href="#示例-2" id="示例-2">示例 2</a></h3>
+<p>这里是另一个示例：</p>
+<pre><pre class="playground"><code class="language-rust">fn closure(mut f: impl FnMut()) {
+    f();
+}
+
+fn main() {
+    let mut x: i32 = 10;
+    closure(|| {
+        x += 10;  // The closure mutates the value of x
+        println!(&quot;Hi {}&quot;, x)
+    });
+    println!(&quot;Value of x after return {}&quot;, x);
+}
+</code></pre></pre>
+<pre><code class="language-rust ignore">_4 = &amp;mut _1;
+_3 = [closure@mut.rs:7:13: 10:6] { x: move _4 };
+</code></pre>
+<p>这一次，在第一行<code>_4 = &amp;mut _1;</code>中，我们可以看到借用变成了可变借用。这是十分合理的，使得闭包可以将<code>x</code>加10。</p>
+<h3><a class="header" href="#示例-3" id="示例-3">示例 3</a></h3>
+<p>又一个示例：</p>
+<pre><pre class="playground"><code class="language-rust">fn closure(f: impl FnOnce()) {
+    f();
+}
+
+fn main() {
+    let x = vec![21];
+    closure(|| {
+        drop(x);  // 在这之后使x不可用
+    });
+    // println!(&quot;Value of x after return {:?}&quot;, x);
+}
+</code></pre></pre>
+<pre><code class="language-rust ignore">_6 = [closure@move.rs:7:13: 9:6] { x: move _1 }; // bb16[3]: scope 1 at move.rs:7:13: 9:6
+</code></pre>
+<p>这里, <code>x</code>直接被移入了闭包内，因此在闭包代码块之后将不允许访问这个变量了。</p>
+<h2><a class="header" href="#编译器中的推断" id="编译器中的推断">编译器中的推断</a></h2>
+<p>现在，让我们深入研究rustc的代码，看看编译器是如何完成所有这些推断的。</p>
+<p>首先，我们先定义一个术语<em>upvar</em>，它在我们之后的讨论中会经常使用到。<strong>upvar</strong>是定义闭包的函数的本地变量。所以，在上述示例中，<strong>x</strong>对于闭包来说是一个upvar。它们有时也会被称为<em>空闲变量</em>以表示它们并未绑定到闭包的上下文中。<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/query/queries/struct.upvars_mentioned.html"><code>compiler/rustc_middle/src/ty/query/mod.rs</code></a>为此定义了一个被成为<em>upv.rs_mentioned</em>的查询。 </p>
+<p>除了懒调用，另一个将闭包区别于普通函数的特征就是它可以从上下文中借用这些upvar；因此编译器必须确定upvar的借用类型。基于这个用途，编译器从分配一个不可变的借用类型开始，可以根据需要来减少限制（将它从<strong>不可变</strong>变成<strong>可变</strong>，再变成<strong>移动</strong>）。 在上述的示例1中，闭包仅仅将变量用于打印，而不以任何方式对其进行修改，因此在<code>mir_dump</code>中，我们发现借用类型的upvar变量<code>x</code>是不可变的。但是，在示例2中，闭包修改了<code>x</code>并将其加上了某个值。由于这种改变，编译器从将<code>x</code>分配为不可变的引用类型开始，必须将其调整为可变的引用。同样的，在示例3中，闭包释放了向量<code>x</code>，因此要求将变量<code>x</code>移入闭包内。依赖于借用类型，闭包需要实现合适的特征：<code>Fn</code>特征对应不可变借用, <code>FnMut</code>对应可变借用，<code>FnOnce</code>对应于移动语义。</p>
+<p>大多数与闭包相关的代码在<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/check/upvar/index.html"><code>compiler/rustc_typeck/src/check/upvar.rs</code></a>文件中，数据结构定义在<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/index.html"><code>compiler/rustc_middle/src/ty/mod.rs</code></a>文件中。</p>
+<p>在我们进一步深入之前，一起讨论下如何通过rustc代码库来检测控制流。对于闭包来说，像下面一样设置<code>RUST_LOG</code>环境变量并在文件中收集输出。</p>
+<pre><code class="language-console">&gt; RUST_LOG=rustc_typeck::check::upvar rustc +stage1 -Z dump-mir=all \
+    &lt;.rs file to compile&gt; 2&gt; &lt;file where the output will be dumped&gt;
+</code></pre>
+<p>这里使用了stage1编译器，并为<code>rustc_typeck::check::upvar</code>模块启用了<code>debug!</code>日志。</p>
+<p>另一种选择是使用lldb或gdb逐步执行代码。</p>
+<ol>
+<li><code>rust-lldb build/x86_64-apple-darwin/stage1/bin/rustc test.rs</code></li>
+<li>在lldb中：
+<ol>
+<li><code>b upvar.rs:134</code>  // 在upvar.rs文件中的某行上设置断点</li>
+<li><code>r</code>  // 一直运行程序直到打到了该断点上</li>
+</ol>
+</li>
+</ol>
+<p>让我们从<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/check/upvar/index.html"><code>upvar.rs</code></a>开始. 这个文件有一个叫<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/expr_use_visitor/struct.ExprUseVisitor.html"><code>euv::ExprUseVisitor</code></a>的结构，该结构遍历闭包的源码并为每一个被借用，被更改，被移动的upvar触发了一个回调。</p>
+<pre><pre class="playground"><code class="language-rust">fn main() {
+    let mut x = vec![21];
+    let _cl = || {
+        let y = x[0];  // 1.
+        x[0] += 1;  // 2.
+    };
+}
+</code></pre></pre>
+<p>在上面的示例中，我们的访问器将会调用两次，对于标记了1和2的代码行，一个用于共享借用，另一个用于可变借用。它还会告诉我们借用了什么。</p>
+<p>通过实现<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/expr_use_visitor/trait.Delegate.html"><code>Delegate</code></a>特征来定义回调。<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/check/upvar/struct.InferBorrowKind.html"><code>InferBorrowKind</code></a>类型实现了<code>Delegate</code>并维护了一个map来记录每个upvar需要哪种捕获方式。捕获的方式可以是<code>ByValue</code>（被移动）或者是<code>ByRef</code>（被借用）。对于<code>ByRef</code>借用，<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/enum.BorrowKind.html"><code>BorrowKind</code></a>可能是定义在<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/index.html"><code>compiler/rustc_middle/src/ty/mod.rs</code></a>中的<code>ImmBorrow</code>，<code>UniqueImmBorrow</code>，<code>MutBorrow</code>。</p>
+<p><code>Delegate</code>定义了一些不同的方法（不同的回调）：
+<strong>consume</strong>方法用于<em>移动</em>变量，<strong>borrow</strong>方法用于某种（共享的或可变的）借用，而当我们看到某种事物的分配时，则调用<strong>mutate</strong>方法。</p>
+<p>所有的这些回调都有一个共同的参数<em>cmt</em>，该参数代表类别，可变形和类型。他定义在<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/mem_categorization/index.html"><code>compiler/rustc_middle/src/middle/mem_categorization.rs</code></a>中。代码注释中写到：“<code>cmt</code>是一个值的完整分类，它指明了该值的起源和位置，以及存储该值的内存的可变性”。根据这些回调（consume，borrow等），我们将会调用相关的<code>adjust_upvar_borrow_kind_for_&lt;something&gt;</code>并传递<code>cmt</code>。一旦借用类型有了调整，我们将它存储在表中，基本上说明了每个闭包都借用了什么。</p>
+<pre><code class="language-rust ignore">self.tables
+    .borrow_mut()
+    .upvar_capture_map
+    .extend(delegate.adjust_upvar_captures);
+</code></pre>
 
                     </main>
 

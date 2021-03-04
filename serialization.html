@@ -167,7 +167,84 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#serialization-in-rustc" id="serialization-in-rustc">Serialization in Rustc</a></h1>
+                        <h1><a class="header" href="#rustc-中的序列化" id="rustc-中的序列化">Rustc 中的序列化</a></h1>
+<p>Rustc 需要在编译期 <a href="https://en.wikipedia.org/wiki/Serialization">序列化</a> 和反序列化各种数据。特别是:</p>
+<ul>
+<li>&quot;Crate 元数据&quot;，主要是查询输出，在编译 crate 时，以二进制格式序列化并输出到 <code>rlib</code> 和 <code>rmeta</code> 文件中，由依赖该库的 crate 将这些文件反序列化。</li>
+<li>某些查询输出以二进制格式序列化为<a href="queries/incremental-compilation-in-detail.html#the-real-world-how-persistence-makes-everything-complicated">持久化增量编译结果</a>。</li>
+<li><code>-Z ast-json</code> 和 <code>-Z ast-json-noexpand</code> 标记以 json 格式序列化 <a href="the-parser.html">AST</a>, 并将结果输出到标准输出。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/struct.CrateInfo.html"><code>CrateInfo</code></a>使用 <code>-Z no-link</code> 标记时被序列化到 json，使用 <code>-Z link-only</code> 标志时，从 json 反序列化。</li>
+</ul>
+<h2><a class="header" href="#encodable-和-decodable-trait" id="encodable-和-decodable-trait"><code>Encodable</code> 和 <code>Decodable</code> trait</a></h2>
+<p><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_serialize/index.html"><code>rustc_serialize</code></a> crate 为可序列化类型定义了两个 trait:</p>
+<pre><code class="language-rust ignore">pub trait Encodable&lt;S: Encoder&gt; {
+    fn encode(&amp;self, s: &amp;mut S) -&gt; Result&lt;(), S::Error&gt;;
+}
+
+pub trait Decodable&lt;D: Decoder&gt;: Sized {
+    fn decode(d: &amp;mut D) -&gt; Result&lt;Self, D::Error&gt;;
+}
+</code></pre>
+<p>还为整型，浮点型，<code>bool</code>，<code>char</code>，<code>str</code> 和各种通用标准库类型都定义了这两个 trait 的实现。</p>
+<p>由这些类型组合成的类型，通常通过 <a href="#derive-macros">derives</a> 实现 <code>Encodable</code> 和 <code>Decodable</code>。这些生成的实现将结构体或枚举中的字段反序列化。对于一个结构体的实现像下面这样:</p>
+<pre><code class="language-rust ignore">#![feature(rustc_private)]
+extern crate rustc_serialize;
+use rustc_serialize::{Decodable, Decoder, Encodable, Encoder};
+
+struct MyStruct {
+    int: u32,
+    float: f32,
+}
+
+impl&lt;E: Encoder&gt; Encodable&lt;E&gt; for MyStruct {
+    fn encode(&amp;self, s: &amp;mut E) -&gt; Result&lt;(), E::Error&gt; {
+        s.emit_struct(&quot;MyStruct&quot;, 2, |s| {
+            s.emit_struct_field(&quot;int&quot;, 0, |s| self.int.encode(s))?;
+            s.emit_struct_field(&quot;float&quot;, 1, |s| self.float.encode(s))
+        })
+    }
+}
+impl&lt;D: Decoder&gt; Decodable&lt;D&gt; for MyStruct {
+    fn decode(s: &amp;mut D) -&gt; Result&lt;MyStruct, D::Error&gt; {
+        s.read_struct(&quot;MyStruct&quot;, 2, |d| {
+            let int = d.read_struct_field(&quot;int&quot;, 0, Decodable::decode)?;
+            let float = d.read_struct_field(&quot;float&quot;, 1, Decodable::decode)?;
+
+            Ok(MyStruct { int, float })
+        })
+    }
+}
+</code></pre>
+<h2><a class="header" href="#编码和解码-arena-allocated-类型" id="编码和解码-arena-allocated-类型">编码和解码 arena allocated 类型</a></h2>
+<p>Rustc 有许多 <a href="memory.html">arena allocated 类型</a>。如果不访问分配这些类型的 arena 就无法反序列化这些类型。<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/codec/trait.TyEncoder.html"><code>TyDecoder</code></a> 和 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/codec/trait.TyDecoder.html"><code>TyEncoder</code></a> trait 是允许访问 <code>TyCtxt</code> 的 <code>Decoder</code> 和 <code>Encoder</code> 的 super trait。</p>
+<p>对于包含 arena allocated 类型的类型，则将实现这些 trait 的 <code>Encodable</code> 和 <code>Decodable</code> 的类型参数绑定在一起。例如</p>
+<pre><code class="language-rust ignore">impl&lt;'tcx, D: TyDecoder&lt;'tcx&gt;&gt; Decodable&lt;D&gt; for MyStruct&lt;'tcx&gt; {
+    /* ... */
+}
+</code></pre>
+<p><code>TyEncodable</code> 和 <code>TyDecodable</code> <a href="#derive-macros">derive 宏</a> 将其扩展为这种实现。</p>
+<p>解码实际的 arena allocated 类型比较困难，因为孤儿规则导致一些实现无法编写。为解决这个问题，<code>rustc_middle</code> 中的定义的 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/codec/trait.RefDecodable.html"><code>RefDecodable</code></a> trait。可以给任意类型实现。<code>TyDecodable</code> 宏会调用 <code>RefDecodable</code> 去解码引用，但是对不同的泛型代码实际上需要特定的类型解码器 <code>Decodable</code>。</p>
+<p>对 interned 类型而言，使用新的类型包装器，如 <code>ty::Predicate</code> 和手动实现 <code>Encodable</code> 和 <code>Decodable</code> 可能更简单，而不是手动实现 <code>RefDecodable</code>。</p>
+<h2><a class="header" href="#derive-宏" id="derive-宏">Derive 宏</a></h2>
+<p><code>rustc_macros</code> crate 定义各种 drive，帮助实现 <code>Decodable</code> 和 <code>Encodable</code>。</p>
+<ul>
+<li><code>Encodable</code> 和 <code>Decodable</code> 宏会生成适用于所有 <code>Encoders</code> 和 <code>Decoders</code> 的实现。这些应该用在不依赖 <code>rustc_middle</code> 的 crate 中，或必须序列化但没有实现 <code>TyEncoder</code> 的类型。</li>
+<li><code>MetadataEncodable</code> 和 <code>MetadataDecodable</code> 生成仅允许通过 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_metadata/rmeta/encoder/struct.EncodeContext.html"><code>rustc_metadata::rmeta::encoder::EncodeContext</code></a> 和 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_metadata/rmeta/decoder/struct.DecodeContext.html"><code>rustc_metadata::rmeta::decoder::DecodeContext</code></a> 解码的实现。这些用在包含 <code>rustc_metadata::rmeta::Lazy</code> 的类型中。</li>
+<li><code>TyEncodable</code> 和 <code>TyDecoder</code> 生成适用于任意 <code>TyEncoder</code> 或 <code>TyDecoder</code> 的实现。这些仅用于 crate 元数据和/或增量缓存中序列化类型，<code>rustc_middle</code> 中大多数是可序列化类型。</li>
+</ul>
+<h2><a class="header" href="#shorthands" id="shorthands">Shorthands</a></h2>
+<p><code>Ty</code> 可以深度递归，如果每个 <code>Ty</code> 被编码会导致 crate 元数据变的非常大。为解决这个问题，每个 <code>TyEncoder</code> 的输出中都有序列化类型的位置缓存。如果要编码的类型在缓存中，则编码写入文件的字节偏移量，而不是像通常那样的序列化类型。类似的方案用于 <code>ty::Predicate</code>。</p>
+<h2><a class="header" href="#lazyt" id="lazyt"><code>Lazy&lt;T&gt;</code></a></h2>
+<p>在创建 <code>TyCtxt&lt;'tcx&gt;</code> 之前先加载 crate 元数据，因此一些反序列化需要推迟到元数据的初始化载入。<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_metadata/rmeta/struct.Lazy.html"><code>Lazy&lt;T&gt;</code></a> 类型将(相对)偏移量包装在了已序列化的 <code>T</code> 的 crate 元数据中。</p>
+<p><code>Lazy&lt;[T]&gt;</code> 和 <code>Lazy&lt;Table&lt;I, T&gt;&gt;</code> 类型提供了一些功能 <code>Lazy&lt;Vec&lt;T&gt;&gt;</code> 和 <code>Lazy&lt;HashMap&lt;I, T&gt;&gt;</code> :</p>
+<ul>
+<li>可以直接从迭代器编码 <code>Lazy&lt;[T]&gt;</code>，无需事先收集到 <code>Vec&lt;T&gt;</code> 中。</li>
+<li>索引到 <code>Lazy&lt;Table&lt;I, T&gt;&gt;</code> 不需要解码除正在读取条目以外的条目。</li>
+</ul>
+<p><strong>注意</strong>: 不缓存 <code>Lazy&lt;T&gt;</code> 第一次反序列化后的值。相反，查询系统是缓存这些结果的主要方式。</p>
+<h2><a class="header" href="#specialization" id="specialization">Specialization</a></h2>
+<p>少数类型，特别是 <code>DefId</code>，针对不同的 <code>Encoder</code> 需要采用不同的实现。目前，这是通过 ad-hoc 专门处理:
+<code>DefId</code> 有一个 <code>default</code> 实现 <code>Encodable&lt;E&gt;</code> 和一个专有的 <code>Encodable&lt;CacheEncoder&gt;</code>。</p>
 
                     </main>
 

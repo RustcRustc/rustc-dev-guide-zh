@@ -167,7 +167,31 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#memory-management-in-rustc" id="memory-management-in-rustc">Memory Management in Rustc</a></h1>
+                        <h1><a class="header" href="#rustc-中的内存管理" id="rustc-中的内存管理">Rustc 中的内存管理</a></h1>
+<p>Rustc 在内存管理方面相当谨慎。编译器在整个编译过程中需要分配 <em>大量</em> 的数据结构，如果我们不够谨慎，这将会耗费大量时间和空间。</p>
+<p>使用 arenas 和 interning 是编译器管理内存的主要方式之一。</p>
+<h2><a class="header" href="#arenas-和-interning" id="arenas-和-interning">Arenas 和 Interning</a></h2>
+<p>在编译期间我们需要创建大量的数据结构。出于对性能的考虑，我们通常从全局内存池中分配这些数据结构; 每个数据结构都从一个长期 <em>arena</em> 中分配一次。这就是所谓的 <em>arena allocation</em>。这个系统减少了内存的分配/释放。它还允许简单地比较类型是否相等: 对每个 interned 类型 <code>X</code> 实现了 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.TyS.html#implementations"><code>X</code> 的 <code>PartialEq</code></a>，因此我们只比较指针就可以判断是否相等。 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.CtxtInterners.html#structfield.arena"><code>CtxtInterners</code></a> 类型包含一系列 interned 类型和 arena 本身的映射。</p>
+<h3><a class="header" href="#例-tytys" id="例-tytys">例: <code>ty::TyS</code></a></h3>
+<p>以 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.TyS.html"><code>ty::TyS</code></a> 为例，它表示编译器中的类型(在<a href="./ty.html">这里</a>了解更多)。每当我们想要构造一个类型时，编译器都不会傻乎乎地直接从缓冲区分配。相反，编译器检查是否构造过该类型。如果构造过的话，只需要获取一个指向之前构造个的类型的指针，否则，就会创建一个新的指针。对于这个设计，如果想知道两种类型是否相同，只需要比较两个指针。<code>TyS</code> 是精心设计的，所以你永远无法在栈上构造 <code>TyS</code>。你只能从这个 arena 分配并 intern <code>TyS</code>，所以它是独一无二的。</p>
+<p>在编译开始时，我们会创建一个缓冲区，每当需要分配一个类型时，就从缓冲区中使用这些类型。如果用完了，就会再创建一个。缓冲区的生命周期为 <code>'tcx</code> 。我们的类型绑定到该生命周期，因此当编译完成时，与该缓冲区相关的所有内存都被释放，<code>'tcx</code> 的引用将无效。</p>
+<p>除了类型之外，还可以分配很多其它的 arena-allocated 数据结构，这些数据结构可以在该模块中找到。以下是一些例子:</p>
+<ul>
+<li><a href="./generic_arguments.html#subst"><code>Substs</code></a>，分配给 <code>mk_substs</code> – 这会 intern 一个切片类型，通常用于指定要替换泛型的值(例如 <code>HashMap&lt;i32, u32&gt;</code> 将被表示为切片 <code>&amp;'tcx [tcx.types.i32, tcx.types.u32]</code>)。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.TraitRef.html"><code>TraitRef</code></a>，通常通过值传递 – 一个 <strong>trait 引用</strong> 包含一个引用的 trait 及其各种类型参数(包括 <code>Self</code>)，如 <code>i32: Display</code> (这里 def-id 会引用 <code>Display</code> trait，并且子类型包含 <code>i32</code>)。 注意 <code>def-id</code> 的定义及讨论在 <code>AdtDef and DefId</code> 部分。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/struct.Predicate.html"><code>Predicate</code></a> 定义 trait 系统要保证的东西 (见 <code>traits</code> 模块)。</li>
+</ul>
+<h2><a class="header" href="#tcx-和怎样使用生命周期" id="tcx-和怎样使用生命周期">tcx 和怎样使用生命周期</a></h2>
+<p><code>tcx</code>(“typing context”)是编译器中的中枢数据结构。它是用于执行各种查询的上下文。 <code>TyCtxt</code> 结构体定义了对这个共享上下文的引用:</p>
+<pre><code class="language-rust ignore">tcx: TyCtxt&lt;'tcx&gt;
+//          ----
+//          |
+//          arena lifetime
+</code></pre>
+<p>如你所见，<code>TyCtxt</code> 类型使用生命周期参数。当你看到类似 <code>'tcx</code> 生命周期的引用时，你就知道它指的是 arena-allocated 的数据(或者说，数据的生命周期至少与 arenas 一样长)。</p>
+<h3><a class="header" href="#关于生命周期" id="关于生命周期">关于生命周期</a></h3>
+<p>Rust 编译器是一个相当大的程序，包含大量的大数据结构(如 AST、 HIR 和类型系统)，因此非常依赖于 arenas 和引用(references)来减少不必要的内存使用。这体现在使用插入编译器(例如 <a href="./rustc-driver.html">driver</a>)的方式上，倾向于使用“push”风格(回调)的 API ，而不是 Rust-ic 风格的“pull”风格(考虑 <code>Iterator</code> trait)。</p>
+<p>编译器通过大量使用线程本地存储和 interning 来减少复制，同时也避免了无处不在的生命期而导致的用户不友好。<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/tls/index.html"><code>rustc_middle::ty::tls</code></a> 模块用于访问这些线程局部变量，尽管你很少需要接触。</p>
 
                     </main>
 
