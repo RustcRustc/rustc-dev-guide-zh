@@ -25,7 +25,7 @@
 - [Zoxc 的 IRLO 线程，这项工作的先驱之一][irlo0]
 - [nikomatsakis 在编译器中列出的内部可变性][imlist]
 - [alexchricton 关于 IRLO 线程的性能][irlo1]
-- [该跟踪问题][tracking]
+- [跟踪该问题][tracking]
 
 [irlo0]: https://internals.rust-lang.org/t/parallelizing-rustc-using-rayon/6606
 [imlist]: https://github.com/nikomatsakis/rustc-parallelization/blob/master/interior-mutability-list.md
