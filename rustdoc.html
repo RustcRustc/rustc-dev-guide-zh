@@ -167,7 +167,68 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#rustdoc" id="rustdoc">Rustdoc</a></h1>
+                        <h1><a class="header" href="#rustdoc-概述" id="rustdoc-概述">Rustdoc 概述</a></h1>
+<p>Rustdoc 实际上直接使用了 rustc 的内部功能。
+它与编译器和标准库一起存在于代码树中。
+本章是关于它如何工作的。
+有关Rustdoc功能及其使用方法的信息，请参见 <a href="https://doc.rust-lang.org/nightly/rustdoc/">Rustdoc book</a>。
+有关rustdoc如何工作的更多详细信息，请参见 [“Rustdoc 内部工作原理” 一章]。</p>
+<p>[“Rustdoc 内部工作原理” 一章]：./rustdoc-internals.md</p>
+<p>Rustdoc 完全在 <a href="https://github.com/rust-lang/rust/tree/master/src/librustdoc"><code>librustdoc</code></a> crate 中实现。
+它可以运行编译器来获取 crate 的内部表示（HIR），
+以及查询项目类型的一些信息。
+<a href="./hir.html">HIR</a> 和 [查询] 在相应的章节中进行了讨论。</p>
+<p><code>librustdoc</code> 主要执行两个步骤来渲染一组文档：</p>
+<ul>
+<li>将 AST “清理”为更适合于创建文档的形式（并且稍微更耐编译器中的“搅动”）。</li>
+<li>使用此清理后的 AST 一次渲染一个 crate 的文档。</li>
+</ul>
+<p>当然实际上并不仅限于此，这样描述简化了许多细节，但这只是一个高层次的概述。</p>
+<p>（注意：<code>librustdoc</code> 是一个库 crate！
+&quot;rustdoc&quot; 二进制文件是使用 <a href="https://github.com/rust-lang/rust/tree/master/src/tools/rustdoc"><code>src/tools/rustdoc</code></a> 
+中的项目创建的。注意所有上述操作都是在 <code>librustdoc</code> crate 的 <code>lib.rs</code> 中的 <code>main</code> 函数中执行的。）</p>
+<h2><a class="header" href="#cheat-sheet" id="cheat-sheet">Cheat sheet</a></h2>
+<ul>
+<li>
+<p>使用 <code>./x.py build</code> 制作一个可以在其他项目上运行的 rustdoc。</p>
+<ul>
+<li>添加 <code>library/test</code> 之后才能使用 <code>rustdoc --test</code>。</li>
+<li>如果您以前使用过 <code>rustup toolchain link local /path/to/build/$TARGET/stage1</code>，则在执行上一个构建命令后，<code>cargo +local doc</code> 将可以正常工作。</li>
+</ul>
+</li>
+<li>
+<p>使用 <code>./x.py doc --stage 1 library/std</code> 来用这个 rustdoc 来生成标准库文档。</p>
+<ul>
+<li>生成的文档位于 <code>build/$TARGET/doc/std</code>, 但这个生成出来的 bundle 期望你将其从 <code>doc</code> 文件夹拷贝到一个 web 服务器上，以便首页和 CSS/JS 可以正常加载。</li>
+</ul>
+</li>
+<li>
+<p>使用 <code>x.py test src/test/rustdoc*</code> 来用 stage1 rustdoc 运行测试。</p>
+<ul>
+<li>参见 [“Rustdoc 内部工作原理” 一章] 来了解更多和测试有关的信息。</li>
+</ul>
+</li>
+<li>
+<p>大多数 HTML 打印代码位于 <code>html/format.rs</code> 和 <code>html/render.rs</code>中。
+它主要由一堆 <code>fmt::Display</code> 实现和补充函数构成。</p>
+</li>
+<li>
+<p>上面实现了 <code>Display</code> 的类型是在 <code>clean/mod.rs</code> 中定义的，
+就在自定义 <code>Clean</code> trait 旁边，该 trait 用于将这些类型的对象从 rustc HIR 中提取出来。</p>
+</li>
+<li>
+<p>使用 rustdoc 进行测试的代码在 <code>test.rs</code> 中。</p>
+</li>
+<li>
+<p>Markdown 渲染器位于 <code>html/markdown.rs</code> 中，包括用于从给定的 Markdown 块中提取文档测试的功能。</p>
+</li>
+<li>
+<p>rustdoc <em>输出</em> 上的测试位于 <code>src/test/rustdoc</code> 中，由 rustbuild 的测试运行器和补充脚本 <code>src/etc/htmldocck.py</code> 处理。</p>
+</li>
+<li>
+<p>搜索索引生成的测试位于 <code>src/test/rustdoc-js</code> 中，是一系列 JavaScript 文件，用于对标准库搜索索引和预期结果的查询进行编码。 </p>
+</li>
+</ul>
 
                     </main>
 

@@ -167,7 +167,74 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#running-tests" id="running-tests">Running tests</a></h1>
+                        <h1><a class="header" href="#运行测试" id="运行测试">运行测试</a></h1>
+<p>您可以使用x.py来运行测试。这是最基本的命令-您几乎永远不想使用它！–如下：</p>
+<pre><code>./x.py test
+</code></pre>
+<p>这将构建第1阶段的编译器，然后运行整个测试套件。 您可能不想经常执行此操作，因为这需要很长时间，并且无论如何bors/GitHub Actions都会为您执行此操作。（通常，在打开我认为已完成的PR后，我会在后台运行此命令，但很少这样做。-nmatsakis）</p>
+<p>测试结果将被缓存，并且在测试过程中以前成功的测试将被<code>忽略</code>。stdout/stderr内容以及每个测试的时间戳文件都可以在build/ARCH/test/下找到。要强制重新运行测试（例如，如果测试运行程序未能注意到更改），您只需删除时间戳文件即可。</p>
+<p>请注意，某些测试需要启用支持Python的gdb。您可以通过在gdb中使用<code>python</code>命令来测试gdb安装是否支持Python。调用后，您可以输入一些Python代码（例如<code>print（&quot;hi&quot;）</code>），然后返回，然后再按CTRL + D执行它。如果要从源代码构建gdb，则需要使用<code>--with-python = &lt;path-to-python-binary&gt;</code>进行配置。</p>
+<h2><a class="header" href="#运行部分测试套件" id="运行部分测试套件">运行部分测试套件</a></h2>
+<p>在特定PR上工作时，您通常将需要运行少量测试。例如，可以在修改rustc之后使用一个好的“冒烟测试”，以查看事物是否正常运行，如下所示：</p>
+<pre><code class="language-bash">./x.py test src/test/{ui,compile-fail}
+</code></pre>
+<p>这将运行<code>ui</code>和<code>compile-fail</code>测试套件。当然，测试套件的选择有些随意，并且可能不适合您正在执行的任务。例如，如果您正在使用debuginfo进行调试，那么使用debuginfo测试套件可能会更好：</p>
+<pre><code class="language-bash">./x.py test src/test/debuginfo
+</code></pre>
+<p>如果您只需要为任何给定的测试套件测试特定的测试子目录，则可以将该目录传递给<code>x.py test</code>：</p>
+<pre><code class="language-bash">./x.py test src/test/ui/const-generics
+</code></pre>
+<p>同样，您可以通过传递单个文件的路径来测试该文件：</p>
+<pre><code class="language-bash">./x.py test src/test/ui/const-generics/const-test.rs
+</code></pre>
+<h3><a class="header" href="#只运行整洁测试脚本" id="只运行整洁测试脚本">只运行整洁测试脚本</a></h3>
+<pre><code class="language-bash">./x.py test tidy
+</code></pre>
+<h3><a class="header" href="#在标准库上运行测试" id="在标准库上运行测试">在标准库上运行测试</a></h3>
+<pre><code class="language-bash">./x.py test --stage 0 library/std
+</code></pre>
+<h3><a class="header" href="#运行整洁测试脚本并且在标准库上运行测试" id="运行整洁测试脚本并且在标准库上运行测试">运行整洁测试脚本并且在标准库上运行测试</a></h3>
+<pre><code class="language-bash">./x.py test --stage 0 tidy library/std
+</code></pre>
+<h3><a class="header" href="#使用阶段1编译器在标准库上运行测试" id="使用阶段1编译器在标准库上运行测试">使用阶段1编译器在标准库上运行测试</a></h3>
+<pre><code class="language-bash">./x.py test library/std
+</code></pre>
+<p>通过列出要运行的测试套件，可以避免为根本没有更改的组件运行测试。</p>
+<p><strong>警告：<strong>请注意，bors仅在完整的第2阶段构建中运行测试；因此，尽管测试在第1阶段</strong>通常</strong>可以正常进行，但仍有一些局限。</p>
+<h2><a class="header" href="#运行单个测试" id="运行单个测试">运行单个测试</a></h2>
+<p>人们想要做的另一件事是运行<strong>单个测试</strong>，通常是他们试图修复的测试。如前所述，您可以传递完整的文件路径来实现这一目标，或者可以使用<code>--test-args</code>选项调用<code>x.py</code>：</p>
+<pre><code class="language-bash">./x.py test src/test/ui --test-args issue-1234
+</code></pre>
+<p>在后台，测试运行程序调用标准rust测试运行程序（与您在<code>#[test]</code>中获得的运行程序相同），因此此命令将最终筛选出名称中包含<code>issue-1234</code>的测试。（因此，<code>--test-args</code>是运行相关测试集合的好方法。）</p>
+<h2><a class="header" href="#编辑和更新参考文件" id="编辑和更新参考文件">编辑和更新参考文件</a></h2>
+<p>如果您有意更改了编译器的输出，或者正在进行新的测试，那么您可以将<code>--bless</code>传递给test子命令。例如，如果<code>src/test/ui</code>中的某些测试失败，则可以运行</p>
+<pre><code class="language-bash">./x.py test src/test/ui --bless
+</code></pre>
+<p>来自动调整<code>.stderr</code>，<code>.stdout</code>或者<code>.fixed</code>文件中的所有测试。当然，您也可以使用<code>--test-args your_test_name</code>标志来定位特定的测试，就像运行测试时一样。</p>
+<h2><a class="header" href="#传递--pass-mode" id="传递--pass-mode">传递<code>--pass $mode</code></a></h2>
+<p>通过UI测试现在具有三种模式：<code>check-pass</code>， <code>build-pass</code> 和<code>run-pass</code>。当传递<code>--pass $mode</code>时，这些测试将被强制在给定的<code>$mode</code>下运行，除非指令测试文件存在指令<code>//ignore-pass</code>。您可以将<code>src/test/ui</code>中的所有测试作为<code>check-pass</code>运行：</p>
+<pre><code class="language-bash">./x.py test src/test/ui --pass check
+</code></pre>
+<p>通过传递<code>--pass $mode</code>，可以减少测试时间。对于每种模式，请参见<a href="./adding.html#%E4%B8%8D%E4%BC%9A%E5%AF%BC%E8%87%B4%E7%BC%96%E8%AF%91%E9%94%99%E8%AF%AF%E7%9A%84%E6%B5%8B%E8%AF%95%C2%A0">此处</a>。</p>
+<h2><a class="header" href="#使用增量编译" id="使用增量编译">使用增量编译</a></h2>
+<p>您可以进一步启用<code>--incremental</code>标志，以在以后的重建中节省更多时间：</p>
+<pre><code class="language-bash">./x.py test src/test/ui --incremental --test-args issue-1234
+</code></pre>
+<p>如果您不想在每个命令中都包含该标志，则可以在<code>config.toml</code>中启用它：</p>
+<pre><code class="language-toml">[rust]
+incremental = true
+</code></pre>
+<p>请注意，增量编译将使用比平常更多的磁盘空间。如果您担心磁盘空间，则可能需要不时地检查<code>build</code>目录的大小。</p>
+<h2><a class="header" href="#使用不同的比较模式运行测试" id="使用不同的比较模式运行测试">使用不同的“比较模式”运行测试</a></h2>
+<p>UI测试可能会有不同的输出，具体取决于编译器所处的特定“模式”。例如，当处于“非词法作用域生命周期”（&quot;non-lexical liftimes&quot;,NLL）模式时，测试<code>foo.rs</code>将首先在<code>foo.nll.stderr</code>中寻找期望的输出，如果没有找到，则回到寻常的<code>foo.stderr</code>。要以NLL模式运行UI测试套件，可以使用以下命令：</p>
+<pre><code class="language-bash">./x.py test src/test/ui --compare-mode=nll
+</code></pre>
+<p>其它比较模式的示例是&quot;noopt&quot;，&quot;migrat&quot;和<a href="./adding.html#%E7%89%88%E6%9C%AC">revisions</a>。</p>
+<h2><a class="header" href="#手动运行测试" id="手动运行测试">手动运行测试</a></h2>
+<p>有时候，手动进行测试会更容易，更快捷。 大多数测试只是<code>rs</code>文件，因此您可以执行操作类似</p>
+<pre><code class="language-bash">rustc +stage1 src/test/ui/issue-1234.rs
+</code></pre>
+<p>这要快得多，但并不总是有效。例如，某些测试包含指定特定的编译器标志或依赖于其它crate的指令，并且如果没有这些选项，它们可能无法以相同的方式运行。</p>
 
                     </main>
 

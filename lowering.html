@@ -167,7 +167,55 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#lowering-ast-to-hir" id="lowering-ast-to-hir">Lowering AST to HIR</a></h1>
+                        <h1><a class="header" href="#lowering" id="lowering">Lowering</a></h1>
+<p>Lowering 步骤将 AST 转换为 <a href="hir.html">HIR</a>。 
+这意味着许多在类型分析或类似的语法无关分析中没有用的代码在这一阶段被删除了。
+这种结构的例子包括但不限于</p>
+<ul>
+<li>括号
+<ul>
+<li>无需替换，直接删除，树结构本身就能明确运算顺序</li>
+</ul>
+</li>
+<li><code>for</code> 循环和 <code>while (let)</code> 循环
+<ul>
+<li>转换为 <code>loop</code> + <code>match</code> 和一些 <code>let</code> binding</li>
+</ul>
+</li>
+<li><code>if let</code>
+<ul>
+<li>转换为 <code>match</code></li>
+</ul>
+</li>
+<li>Universal <code>impl Trait</code>
+<ul>
+<li>转换成范型参数（会添加flag来标志这些参数不是由用户写的）</li>
+</ul>
+</li>
+<li>Existential <code>impl Trait</code>
+<ul>
+<li>转换为虚拟的 <code>existential type</code> 声明</li>
+</ul>
+</li>
+</ul>
+<p>Lowering 需要遵守几点，否则就会违反 <code>src/librustc_middle/hir/map/hir_id_validator.rs</code> 中的制定的检查规则：</p>
+<ol>
+<li>如果创建了一个<code>HirId</code>，那就必须使用它。
+因此，如果您使用了 <code>lower_node_id</code>，则<em>必须</em>使用生成的 <code>NodeId</code> 或 <code>HirId</code>（两个都可以，因为检查 <code>HIR</code> 中的 <code>NodeId</code> 时也会检查是否存在现有的 <code>HirId</code>）</li>
+<li>Lowering <code>HirId</code> 必须在对 item 有所有权的作用域内完成。
+这意味着如果要创建除当前正在 Lower 的 item 之外的其他 item，则需要使用 <code>with_hir_id_owner</code>。
+例如，在lower existential的 <code>impl Trait</code> 时会发生这种情况.</li>
+<li>即使其 <code>HirId</code> 未使用，要放入HIR结构中的 <code>NodeId</code> 也必须被 lower。
+此时一个合理的方案是调用 <code>let _ = self.lower_node_id(node_id);</code>。</li>
+<li>如果要创建在 <code>AST</code> 中不存在的新节点，则<em>必须</em>通过调用 <code>next_id</code> 方法为它们创建新的 ID。
+该方法会生成一个新的 <code>NodeId</code> 并自动为您 lowering 它，以便您获得 <code>HirId</code>。</li>
+</ol>
+<p>如果您要创建新的 <code>DefId</code> ，由于每个 <code>DefId</code> 需要具有一个对应的 <code>NodeId</code>，建议将这些 <code>NodeId</code> 添加到 <code>AST</code> 中，这样您就不必在lowering时生成新的<code>DefId</code>。
+这样做的好处是创建了一种通过 <code>NodeId</code> 查找某物的 <code>DefID</code> 的方法。
+如果 lower 操作需要在多个位置使用该 <code>DefId</code>，则不能在所有这些位置生成一个新的 <code>NodeId</code>，因为那样的话，您将获得多余的的 <code>DefId</code>。
+而对于来自AST的<code>NodeId</code>来说，这些就都不是问题了。</p>
+<p>有一个 <code>NodeId</code> 也使得 <code>DefCollector</code> 可以生成 <code>DefId</code>，而不需要立即进行操作。
+将 <code>DefId</code> 的生成集中在一个地方可以使重构和理解变得更加容易。</p>
 
                     </main>
 

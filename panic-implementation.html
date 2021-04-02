@@ -167,7 +167,71 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#panic-implementation" id="panic-implementation">Panic Implementation</a></h1>
+                        <h1><a class="header" href="#rust-中的-panic" id="rust-中的-panic">rust 中的 panic</a></h1>
+<!-- toc -->
+<h2><a class="header" href="#步骤1-调用-panic-宏" id="步骤1-调用-panic-宏">步骤1: 调用 <code>panic!</code> 宏</a></h2>
+<p>实际上有两个 panic 宏 - 一个定义在 <code>core</code> 中，一个定义在 <code>std</code> 中。这是因为 <code>core</code> 中的代码可能 panic。<code>core</code> 是在 <code>std</code> 之前构建的，但不管是 <code>core</code> 或 <code>std</code> 中的 panic，我们希望运行时使用相同的机制。</p>
+<h3><a class="header" href="#core-中-panic-的定义" id="core-中-panic-的定义">core 中 panic! 的定义</a></h3>
+<p><code>core</code> <code>panic!</code> 宏最终调用如下 (在 <code>library/core/src/panicking.rs</code>):</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// 注意 这个函数永远不会越过 FFI 边界; 这是一个 Rust 到 Rust 的调用
+extern &quot;Rust&quot; {
+    #[lang = &quot;panic_impl&quot;]
+    fn panic_impl(pi: &amp;PanicInfo&lt;'_&gt;) -&gt; !;
+}
+
+let pi = PanicInfo::internal_constructor(Some(&amp;fmt), location);
+unsafe { panic_impl(&amp;pi) }
+<span class="boring">}
+</span></code></pre></pre>
+<p>实际上解决该问题需要通过几个间接层:</p>
+<ol>
+<li>
+<p>在 <code>compiler/rustc_middle/src/middle/weak_lang_items.rs</code> 中，<code>panic_impl</code> 用 <code>rust_begin_unwind</code> 声明标记为 '弱 lang 项'。在 <code>rustc_typeck/src/collect.rs</code> 中将实际符号名设置为 <code>rust_begin_unwind</code>。</p>
+<p>注意 <code>panic_impl</code> 被声明在一个 <code>extern &quot;Rust&quot;</code> 块中，这意味着 core 将尝试调用一个名为 <code>rust_begin_unwind</code> 的外部符号(在链接时解决)</p>
+</li>
+<li>
+<p>在 <code>library/std/src/panicking.rs</code> 中，我们有这样的定义:</p>
+</li>
+</ol>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>/// core crate panic 的进入点。
+#[cfg(not(test))]
+#[panic_handler]
+#[unwind(allowed)]
+pub fn begin_panic_handler(info: &amp;PanicInfo&lt;'_&gt;) -&gt; ! {
+    ...
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>特殊 <code>panic_handler</code> 属性是通过 <code>compiler/rustc_middle/src/middle/lang_items</code> 解析。<code>extract</code> 函数将 <code>panic_handler</code> 属性转换一个 <code>panic_impl</code> lang 项。</p>
+<p>现在，我们在 <code>std</code> 中有一个匹配的 <code>panic_handler</code> lang 项。这个函数与定义在 <code>core</code> 中的 <code>extern { fn panic_impl }</code> 经过相同的过程，最终得到一个名为 <code>rust_begin_unwind</code> 的符号。在链接时，<code>core</code> 中的符号引用将被解析为 <code>std</code> 中的定义(Rust 源中调用 <code>begin_panic_handler</code>)。</p>
+<p>因此，控制流将在运行时从 core 传递到 std。 这允许来自 core 的 panic 使用和其它 panic 相同的基础结构(panic 钩子，unwinding 等)</p>
+<h3><a class="header" href="#std-中-panic-的实现" id="std-中-panic-的实现">std 中 panic! 的实现</a></h3>
+<p>这就是真正的 panic 相关逻辑开始的地方。在 <code>library/std/src/panicking.rs</code>，控制传递给 <code>rust_panic_with_hook</code>。这个方法负责调用全局 panic 钩子，并检查是否出现双重 panic。最后，调用由 panic 运行时提供的 <code>__rust_start_panic</code>。</p>
+<p>对 <code>__rust_start_panic</code> 的调用非常奇怪 - 它被传递给 <code>*mut &amp;mut dyn BoxMeUp</code>，转换成一个 <code>usize</code>。一起分解一下这种类型:</p>
+<ol>
+<li>
+<p><code>BoxMeUp</code> 是一个内部 trait。它是给 <code>PanicPayload</code>
+(用户提供的有效负载类型的包装器)实现的，并且有一个方法<code>fn box_me_up(&amp;mut self) -&gt; *mut (dyn Any + Send)</code>。这个方法获取用户提供的有效负载 (<code>T: Any + Send</code>)，将其打包，并将其转换为一个原始指针。</p>
+</li>
+<li>
+<p>当我们调用 <code>__rust_start_panic</code> 时，会得到一个 <code>&amp;mut dyn BoxMeUp</code>。但是，这是一个胖指针 (是 <code>usize</code> 的两倍大)。为了跨 FFI 边界上将其传递给 panic 运行时，我们对<em>的可变引用</em> (<code>&amp;mut &amp;mut dyn BoxMeUp</code>)进行可变引用，并将其转换为原始指针(<code>*mut &amp;mut dyn BoxMeUp</code>)。外部的原始指针是一个瘦指针，它指向一个 <code>Sized</code> 类型 (一个可变引用)。因此，可以将这个瘦指针转换为一个 <code>usize</code>，它适用于跨 FFI 边界传递。</p>
+</li>
+</ol>
+<p>最后，调用使用 <code>usize</code> 调用 <code>__rust_start_panic</code> 。现在进入 panic 运行时。</p>
+<h2><a class="header" href="#步骤-2-panic-运行时" id="步骤-2-panic-运行时">步骤 2: panic 运行时</a></h2>
+<p>Rust 提供两个 panic 运行时: <code>panic_abort</code> 和 <code>panic_unwind</code>。用户可以在构建时通过 <code>Cargo.toml</code> 在它们之间进行选择</p>
+<p><code>panic_abort</code> 非常简单: 正如你所期望的那样，它实现 <code>__rust_start_panic</code> 只为中断。</p>
+<p><code>panic_unwind</code> 是更有趣的情况。</p>
+<p>在它的实现 <code>__rust_start_panic</code> 中，我们使用 <code>usize</code>，将其转换回 <code>*mut &amp;mut dyn BoxMeUp</code>，解引用它，并调用 <code>&amp;mut dyn BoxMeUp</code> 上的  <code>box_me_up</code>。在这个指针中，我们有一个指向负载本身的原始指针 (一个 <code>*mut (dyn Send + Any)</code>): 即一个指向调用 <code>panic!</code> 的用户提供真实值的原始指针。</p>
+<p>至此，与平台无关的代码结束。现在，我们现在调用特定于平台的展开逻辑 (例如 <code>unwind</code>)。这个代码负责展开栈，运行与每个帧(当前，运行析构函数)相关联的所有 'landing pads'，并将控制权转移到 <code>catch_unwind</code> 帧。</p>
+<p>请注意，所有 panic 要么中止进程，要么被调用的 <code>catch_unwind</code> 捕获: 在 <code>library/std/src/rt.rs</code> 中，调用用户提供的
+<code>main</code> 函数是包装在 <code>catch_unwind</code> 中。</p>
 
                     </main>
 

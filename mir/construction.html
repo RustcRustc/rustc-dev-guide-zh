@@ -167,7 +167,93 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#thir-and-mir-construction" id="thir-and-mir-construction">THIR and MIR construction</a></h1>
+                        <h1><a class="header" href="#mir-的构建" id="mir-的构建">MIR 的构建</a></h1>
+<p>从 <a href="../hir.html">HIR</a> lower到 <a href="./index.html">MIR</a> 的过程会在下面（可能不完整）这些item上进行：</p>
+<ul>
+<li>函数体和闭包体</li>
+<li><code>static</code> 和 <code>const</code> 的初始化</li>
+<li>枚举 discriminant 的初始化</li>
+<li>任何类型的胶水和补充代码
+<ul>
+<li>Tuple 结构体的初始化函数</li>
+<li>Drop 代码 （即没有手动调用的 <code>Drop::drop</code> 函数的对象的 <code>drop</code>）</li>
+<li>没有显式实现 <code>Drop</code> 的对象的 <code>drop</code></li>
+</ul>
+</li>
+</ul>
+<p>Lowering 是通过调用 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir_build/build/fn.mir_built.html"><code>mir_built</code></a> 查询触发的。
+MIR 构建器实际上并不使用 HIR，而是对 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir_build/thir/index.html">THIR</a> 中的表达式进行递归处理。</p>
+<p>Lowering会为函数签名中指定的每个参数创建局部变量。
+接下来，它为指定的每个绑定创建局部变量（例如， <code>(a, b): (i32, String)</code>）产生3个绑定，一个用于参数，两个用于绑定。
+接下来，它生成字段访问，该访问从参数读取字段并将其值写入绑定变量。</p>
+<p>在解决了初始化之后，lowering为函数体递归生成 MIR（ <code>Block</code> 表达式）并将结果写入 <code>RETURN_PLACE</code>。</p>
+<h2><a class="header" href="#unpack-所有东西" id="unpack-所有东西"><code>unpack!</code> 所有东西</a></h2>
+<p>生成 MIR 的函数有两种模式。
+第一种情况，如果该函数仅生成语句，则它将以基本块作为参数，这些语句应放入该基本块。
+然后可以正常返回结果：</p>
+<pre><code class="language-rust ignore">fn generate_some_mir(&amp;mut self, block: BasicBlock) -&gt; ResultType {
+   ...
+}
+</code></pre>
+<p>但是还有其他一些函数会生成新的基本块。
+例如，lowering 像 <code>if foo { 22 } else { 44 }</code> 这样的表达式需要生成一个小的“菱形图”。
+在这种情况下，函数将在其代码开始处使用一个基本块，并在代码生成结束时返回一个（可能是）新的基本块。
+<code>BlockAnd</code> 类型用于表示此类情况：</p>
+<pre><code class="language-rust ignore">fn generate_more_mir(&amp;mut self, block: BasicBlock) -&gt; BlockAnd&lt;ResultType&gt; {
+    ...
+}
+</code></pre>
+<p>当您调用这些函数时，通常有一个局部变量 <code>block</code>，它实际上是一个“光标”。 它代表了我们要添加新的MIR的位置。
+当调用 <code>generate_more_mir</code> 时，您会想要更新该光标。
+您可以手动执行此操作，但这很繁琐：</p>
+<pre><code class="language-rust ignore">let mut block;
+let v = match self.generate_more_mir(..) {
+    BlockAnd { block: new_block, value: v } =&gt; {
+        block = new_block;
+        v
+    }
+};
+</code></pre>
+<p>因此，我们提供了一个宏，可让您通过如下方式完成更新：
+<code>let v = unpack!(block = self.generate_more_mir(...))</code>。
+它简单地提取新的块并覆盖在 <code>unpack!</code> 中指明的变量 <code>block</code>。</p>
+<h2><a class="header" href="#将表达式-lowering-到-mir" id="将表达式-lowering-到-mir">将表达式 Lowering 到 MIR</a></h2>
+<p>本质上一个表达式可以有四种表示形式：</p>
+<ul>
+<li><code>Place</code> 指一个（或一部分）已经存在的内存地址（本地，静态，或者提升过的）</li>
+<li><code>Rvalue</code> 是可以给一个 <code>Place</code> 赋值的东西</li>
+<li><code>Operand</code> 是一个给像 <code>+</code> 这样的运算符或者一个函数调用的参数</li>
+<li>一个存放了一个值的拷贝的临时变量</li>
+</ul>
+<p>下图简要描绘了这些表示形式之间的交互：</p>
+<img src="https://raw.githubusercontent.com/rust-lang/rustc-dev-guide/master/src/mir/mir_overview.svg">
+<p><a href="https://raw.githubusercontent.com/rust-lang/rustc-dev-guide/9a676ee3a4bc9d8d054efd1ff57fc15ce19c00bd/src/mir/mir_detailed.svg">点此看更为详细的交互图</a></p>
+<p>我们首先将函数体 lowering 到一个 <code>Rvalue</code>，这样我们就可以为 <code>RETURN_PLACE</code> 创建一个赋值，
+这个 <code>Rvalue</code> 的 lowering 反过来会触发其参数的 <code>Operand</code> lowering（如果有的话）
+lowering <code>Operand</code> 会产生一个 <code>const</code> 操作数，或者移动/复制出 <code>Place</code>，从而触发 <code>Place</code> lowering。
+如果 lowering 的表达式包含操作，则 lowering 到 <code>Place</code> 的表达式可以触发创建一个临时变量。
+这是蛇咬自己的尾巴的地方，我们需要触发 <code>Rvalue</code> lowering，以将表达式的值写入本地变量。</p>
+<h2><a class="header" href="#operator-lowering" id="operator-lowering">Operator lowering</a></h2>
+<p>内置类型的运算符不会 lower 为函数调用（这将导致无限递归调用，因为这些 trait 实现包含了操作本身）。
+相反，对于这些类型已经存在了用于二元和一元运算符和索引运算的 <code>Rvalue</code>。
+这些 <code>Rvalue</code> 稍后将生成为 llvm 基本操作或 llvm 内部函数。</p>
+<p>所有其他类型的运算符都被 lower 为对运算符对应 trait 的实现中的的函数调用。</p>
+<p>无论采用哪种 lower 方式，运算符的参数都会 lower 为<code>Operand</code>。
+这意味着所有参数都是常量或者引用局部或静态位置中已经存在的值。</p>
+<h2><a class="header" href="#方法调用的-lowering" id="方法调用的-lowering">方法调用的 lowering</a></h2>
+<p>方法调用被降低到与一般函数调用相同的<code>TerminatorKind</code>。
+在<a href="./index.html">MIR</a>中，方法调用和一般函数调用之间不再存在差异。</p>
+<h2><a class="header" href="#条件" id="条件">条件</a></h2>
+<p>不带字段变量的 <code>enum</code> 的 <code>if</code> 条件判断和 <code>match</code> 语句都会被lower为 <code>TerminatorKind::SwitchInt</code>。
+每个可能的值（如果为 <code>if</code> 条件判断，则对应的值为 <code>0</code> 和 <code>1</code>）都有一个对应的 <code>BasicBlock</code>。
+分支的参数是表示if条件值的 <code>Operand</code>。</p>
+<h3><a class="header" href="#模式匹配" id="模式匹配">模式匹配</a></h3>
+<p>具有字段的 <code>enum</code> 上的 <code>match</code> 语句也被 lower 为 <code>TerminatorKind::SwitchInt</code>，但是其 <code>Operand</code> 是一个 <code>Place</code>，可以在其中找到该值的判别式。
+这通常涉及将判别式读取为新的临时变量。</p>
+<h2><a class="header" href="#聚合构造" id="聚合构造">聚合构造</a></h2>
+<p>任何类型的聚合值（例如结构或元组）都是通过 <code>Rvalue::Aggregate</code> 建立的。
+所有字段都 lower 为 <code>Operator</code>。
+从本质上讲，这等效于对每个聚合上的字段都会有一个赋值语句，如果必要的话还会再加上一个对 <code>enum</code> 的判别式的赋值。</p>
 
                     </main>
 

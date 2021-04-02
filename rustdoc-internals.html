@@ -167,7 +167,177 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#rustdoc" id="rustdoc">Rustdoc</a></h1>
+                        <h1><a class="header" href="#rustdoc-内部工作原理" id="rustdoc-内部工作原理">Rustdoc 内部工作原理</a></h1>
+<!-- toc -->
+<p>本页介绍了 rustdoc 的 pass 和模式。有关rustdoc的概述，
+请参阅<a href="./rustdoc.html">“Rustdoc概述”一章</a>。</p>
+<h2><a class="header" href="#从-crate-到-clean" id="从-crate-到-clean">从 crate 到 clean</a></h2>
+<p>在 core.rs 中有两个主要项目：<code>DocContext</code> 结构和 <code>run_core</code> 函数。
+后者会让 <code>rustdoc</code> 调用 <code>rustc</code> 将 crate  编译到 <code>rustdoc</code> 可以接手的地步。
+前者是状态容器，用于在 crate 中爬取信息时收集其文档。</p>
+<p>crate 爬取的主要过程是通过几个在 <code>clean/mod.rs</code> 中的 <code>Clean</code> trait 实现完成的。
+<code>Clean</code> trait 是一个转换 trait，它定义了一个方法：</p>
+<pre><code class="language-rust ignore">pub trait Clean&lt;T&gt; {
+    fn clean(&amp;self, cx: &amp;DocContext) -&gt; T;
+}
+</code></pre>
+<p><code>clean/mod.rs</code> 还定义了稍后用于渲染文档页面的 “clean 过的” AST 类型。
+通常，对于每个 <code>Clean</code> 的实现，都会从 rustc 中获取一些 AST 或 HIR 类型，
+并将其转换为适当的“clean 过的”的类型。
+更“大型”的构造（例如模块或相关项目）可能会在其 <code>Clean</code> 实现中进行一些额外的处理，
+但是在大多数情况下，这些实现都是直接的转换。
+该模块的入口是 <code>impl Clean&lt;Crate&gt; for visit_ast::RustdocVisitor</code>，由上面的 <code>run_core</code> 调用。</p>
+<p>您看，我实际上前面撒了一点小谎：
+在 <code>clean/mod.rs</code> 中的事件发生之前，还有另一个AST转换。
+在 <code>visit_ast.rs</code> 中的 <code>RustdocVisitor</code> 类型<em>实际上</em>抓取了一个
+<code>rustc_hir::Crate</code> 以获取第一个中间表示形式，
+该中间表示形式在 <code>doctree.rs</code> 中定义。
+此过程主要是为了获得有关 HIR 类型的一些中间包装，并处理可见性和内联。
+这是处理 <code>#[doc(inline)]</code>、 <code>#[doc(no_inline)]</code> 和 <code>#[doc(hidden)]</code> 的地方，
+以及决定 pub use 是否应该渲染为一整页还是模块页面中的“Reexport”行。</p>
+<p>在 <code>clean/mod.rs</code> 中发生的另一件主要事情是将 doc 注释和 <code>#[doc=&quot;&quot;]</code> 属性收集到 Attributes 结构的单独字段中，
+这个字段出现在任何需要手写文档的地方。这使得之后容易收集此文档。</p>
+<p>该过程的主要输出是一个 <code>clean::Crate</code>，其中有一个项目树描述了目标 crate 中有公开文档的项目。</p>
+<h3><a class="header" href="#hot-potato" id="hot-potato">Hot potato</a></h3>
+<p>在继续进行下一步之前，在文档会上有一些重要的“pass”。
+这些操作包括将单独的“属性”组合为单个字符串并去除前导空格，
+以使文档能更容易地被 markdown 解析器解析，
+或者删除未公开的项目或使用 <code>#[doc(hidden)]</code> 故意隐藏的项目。
+这些都在 <code>passes/</code> 目录中实现，每文件一个 pass。
+默认情况下，所有这些 pass 都会在 crate 进行，
+但是与私有/隐藏的条目有关的 pass 可以通过将 <code>--document-private-items</code> 传入 rustdoc来绕过。
+请注意，与之前的 AST 转换组不同，这些 pass 是在 <em>cleaned</em> crate 上运行的。</p>
+<p>（严格来说，您可以微调 pass 甚至添加自己的pass，但是<a href="https://github.com/rust-lang/rust/issues/44136">我们正在尝试 deprecate 这种行为</a>。
+如果您需要对这些 pass 进行更细粒度的控制，请告诉我们！）</p>
+<p>以下是截至 <!-- date: 2021-02 --> 2021年2月的 pass 列表：</p>
+<ul>
+<li>
+<p><code>calculate-doc-coverage</code> 计算 <code>--show-coverage</code> 使用的信息。</p>
+</li>
+<li>
+<p><code>check-code-block-syntax</code> 验证 Rust 代码块的语法
+（<code>```rust</code>）</p>
+</li>
+<li>
+<p><code>check-invalid-html-tags</code> 检测 doc comments 中的不合法 HTML（如没有被正确关闭的 <code>&lt;span&gt;</code>）。</p>
+</li>
+<li>
+<p><code>check-non-autolinks</code> 检测可以或者应该使用尖括号写的链接 （这些代码应该由 nightly-only<!-- date: 2021-02 --> 的 lint 选项 <code>non_autolinks</code> 开启）。</p>
+</li>
+<li>
+<p><code>collapse-docs</code> 将所有文档 attributes 拼接成一个文档 attribute。
+这是必须的，因为每行文档注释都是单独的文档 attribute，<code>collapse-docs</code> 会将它们合并成单独的一个字符串，其中每个 attribute 之间都有换行符连接。</p>
+</li>
+<li>
+<p><code>collect-intra-doc-links</code> 解析 <a href="https://doc.rust-lang.org/rustdoc/linking-to-items-by-name.html">intra-doc links</a>。</p>
+</li>
+<li>
+<p><code>collect-trait-impls</code> 为 crate 中的每个项目收集 trait 提示。
+例如，如果我们定义一个实现 trait 的结构，则此过程将注意到该结构实现了该 trait。</p>
+</li>
+<li>
+<p><code>doc-test-lints</code> 在 doctests 上运行各种 lint。</p>
+</li>
+<li>
+<p><code>propagate-doc-cfg</code> 将 <code>#[doc(cfg(...))]</code> 传递给子 item。</p>
+</li>
+<li>
+<p><code>strip-priv-imports</code> 删去所有私有导入语句（<code>use</code>、 <code>extern crate</code>）。
+这是必需的，因为 rustdoc 将通过将项目的文档内联到模块中或创建带有导入的 “Reexport” 部分来处理 <em>公有</em> 导入。
+这个 pass 保证了这些导入能反应在文档上。</p>
+</li>
+<li>
+<p><code>strip-hidden</code> 和 <code>strip-private</code> 从输出中删除所有 <code>doc(hidden)</code> 和 私有 item。
+<code>strip-private</code> 包含了 <code>strip-priv-imports</code>。基本上，目标就是移除和公共文档无关的 item。</p>
+</li>
+<li>
+<p><code>unindent-comments</code> 移除了注释中多余的缩进，以使得 Markdown 能被正确地解析。
+这是必需的，因为编写文档的约定是在 <code>///</code> 或 <code>//!</code> 标记与文档文本之间空一格，但是 Markdown 对空格敏感。
+例如，具有四个空格缩进的文本块会被解析为代码块，因此如果我们不移除注释中的缩进，这些列表项</p>
+<pre><code class="language-rust ignore">/// A list:
+///
+///    - Foo
+///    - Bar
+</code></pre>
+<p>会被违反用户期望地解析为代码块。</p>
+</li>
+</ul>
+<p><code>passes/</code> 中也有一个 <code>stripper</code> 模块，但其中是一些 <code>strip-*</code> pass 使用的工具函数，它并非是一个 pass。</p>
+<h2><a class="header" href="#从-clean-到-crate" id="从-clean-到-crate">从 clean 到 crate</a></h2>
+<p>这是 rustdoc 中“第二阶段”开始的地方。
+这个阶段主要位于 <code>html/</code> 文件夹中，并且以 <code>html/render.rs</code> 中的 <code>run()</code> 开始。
+该代码在渲染这个 crate 的所有文档前会负责设置渲染期间使用的 <code>Context</code>、<code>SharedContext</code> 和 <code>Cache</code>，
+并复制每个渲染文档集中的静态文件（字体，CSS 和 JavaScript 等保存在 <code>html/static/</code> 中的文件），
+创建搜索索引并打印出源代码渲染。</p>
+<p>直接在 <code>Context</code> 上实现的几个函数接受 <code>clean::Crate</code> 参数，
+并在渲染项或其递归模块子项之间建立某种状态。
+从这里开始，通过 <code>html/layout.rs</code> 中的巨大 <code>write!()</code> 调用，开始进行“页面渲染”。
+从项目和文档中实际生成HTML的部分发生在一系列 <code>std::fmt::Display</code> 实现和接受 <code>&amp;mut std::fmt::Formatter</code> 的函数中。
+写出页面正文的顶层实现是 <code>html/render.rs</code> 中的 <code>impl &lt;'a&gt; fmt::Display for Item &lt;'a&gt;</code>，
+它会基于被渲染的 <code>Item</code> 调用多个 <code>item_*</code> 之一。</p>
+<p>根据您要查找的渲染代码的类型，您可能会在 <code>html/render.rs</code> 中找到主要项目，
+例如 “结构体页面应如何渲染” 或者对于较小的组件，对应项目可能在 <code>html/format.rs</code> 中，
+如“我应该如何将 where 子句作为其他项目的一部分进行打印”。</p>
+<p>每当 rustdoc 遇到应在其上打印手写文档的项目时，
+它就会调用 <code>html/markdown.rs</code> 中的与 Markdown 部分的接口。
+其中暴露了一系列包装了字符串 Markdown 的类型，
+并了实现 <code>fmt::Display</code> 以输出 HTML 文本。
+在运行 Markdown 解析器之前，要特别注意启用某些功能（如脚注和表格）并在 Rust 代码块中添加语法高亮显示（通过 <code>html/highlight.rs</code>）。
+这里还有一个函数（<code>find_testable_code</code>），
+该函数专门扫描Rust代码块，以便测试运行程序代码可以在 crate 中找到所有 doctest。</p>
+<h3><a class="header" href="#从-soup-到-nuts" id="从-soup-到-nuts">从 soup 到 nuts</a></h3>
+<p>(另一个标题： <a href="https://www.youtube.com/watch?v=hOLAGYmUQV0">&quot;An unbroken thread that stretches from those first <code>Cell</code>s to us&quot;</a>)</p>
+<p>重要的是要注意，AST 清理可以向编译器询问信息
+（至关重要的是，<code>DocContext</code> 包含 <code>TyCtxt</code>），
+但是页面渲染则不能。在 <code>run_core</code> 中创建的 <code>clean::Crate</code> 在传递给
+<code>html::render::run</code> 之前传递到编译器上下文之外。
+这意味着，在项目定义内无法立即获得的许多“补充数据”，
+例如哪个 trait 是语言使用的 <code>Deref</code> trait，需要在清理过程中收集并存储在 <code>DocContext</code> 中，
+并在 HTML 渲染期间传递给 <code>SharedContext</code>。
+这表现为一堆共享状态，上下文变量和 <code>RefCell</code>。</p>
+<p>还要注意的是，某些来自“请求编译器”的项不会直接进入 <code>DocContext</code> 中 —— 
+例如，当从外部 crate 中加载项时，
+rustdoc 会询问 trait 实现并基于该信息生成新的 <code>Item</code>。
+它直接进入返回的 <code>Crate</code>，而不是通过 <code>DocContext</code>。
+这样，就可以在呈现 HTML 之前将这些实现与其他实现一起收集。 </p>
+<h2><a class="header" href="#其他技巧" id="其他技巧">其他技巧</a></h2>
+<p>所有这些都描述了从 Rust crate 生成HTML文档的过程，
+但是 rustdoc 可以以其他几种主要模式运行。
+它也可以在独立的 Markdown 文件上运行，也可以在 Rust 代码或独立的 Markdown 文件上运行 doctest。
+对于前者，它直接调用 <code>html/markdown.rs</code>，可以通过选项将目录插入到输出 HTML 的模式。</p>
+<p>对于后者，rustdoc 运行类似的部分编译以获取在 <code>test.rs</code> 中的文档的相关信息。 
+但是它并不经过完整的清理和渲染过程，而是运行了一个简单得多的 crate walk，仅抓取手写的文档。
+与上述 <code>html/markdown.rs</code> 中的 <code>find_testable_code</code> 结合，它会建立一组要运行的测试，然后再将其交给测试运行器。
+<code>test.rs</code> 中一个值得注意的的位置是函数 <code>make_test</code>，在该函数中，手写 <code>doctest</code> 被转换为可以执行的东西。</p>
+<p>可以<a href="https://quietmisdreavus.net/code/2018/02/23/how-the-doctests-get-made/">在这里</a>找到一些关于 <code>make_test</code> 的更多信息。</p>
+<h2><a class="header" href="#dotting-is-and-crossing-ts" id="dotting-is-and-crossing-ts">Dotting i's and crossing t's</a></h2>
+<p>所以简而言之，这就是rustdoc的代码，但是 repo 中还有很多事情要处理。
+由于我们手头有完整的 <code>compiletest</code> 套件，因此在 <code>src/test/rustdoc</code> 中有一组测试可以确保最终的 HTML 符合我们在各种情况下的期望。
+这些测试还使用了补充脚本 <code>src/etc/htmldocck.py</code>，
+该脚本允许它使用 XPath 表示法浏览最终的 HTML，以精确查看输出结果。
+rustdoc测试可用的所有命令的完整说明（例如 <a href="https://github.com/rust-lang/rust/blob/master/src/etc/htmldocck.py#L39"><code>@has</code></a> 和 <a href="https://github.com/rust-lang/rust/blob/master/src/etc/htmldocck.py#L44"><code>@matches</code></a>）位于 <a href="https://github.com/rust-lang/rust/blob/master/src/etc/htmldocck.py"><code>htmldocck.py</code></a> 中。</p>
+<p>要在 rustdoc 测试中使用多个 crate，请添加 <code>// aux-build:filename.rs</code>
+到测试文件的顶部。应该将 <code>filename.rs</code> 放置在相对于带有注释的测试文件的 <code>auxiliary</code> 目录中。
+如果您需要为辅助文件构建文档，请使用 <code>// build-aux-docs</code>。</p>
+<p>此外，还有针对搜索索引和 rustdoc 查询它的能力的独立测试 。
+<code>src/test/rustdoc-js</code> 中的文件每个都包含一个不同的搜索查询和预期结果（按“搜索”标签细分）。
+这些文件由 <code>src/tools/rustdoc-js</code> 和 Node.js 运行时中的脚本处理。
+这些测试没有详尽的描述，但是可以在 <code>basic.js</code> 中找到一个包含所有选项卡结果的宽泛示例。
+基本思想是，将给定的 <code>QUERY</code> 与一组 <code>EXPECTED</code> 结果相匹配，并附上每个 item 的完整路径。</p>
+<h2><a class="header" href="#本地测试" id="本地测试">本地测试</a></h2>
+<p>生成的 HTML 文档的某些功能可能需要跨页面使用本地存储，如果没有 HTTP 服务器，这将无法正常工作。
+要在本地测试这些功能，可以运行本地 HTTP 服务器，如下所示： </p>
+<pre><code class="language-bash">$ ./x.py doc library/std --stage 1
+# The documentation has been generated into `build/[YOUR ARCH]/doc`.
+$ python3 -m http.server -d build/[YOUR ARCH]/doc
+</code></pre>
+<p>现在，您可以像浏览 Internet 上的文档一样浏览本地文档。 例如，<code>std</code> 的网址将是 <code>/std/</code>。</p>
+<h2><a class="header" href="#see-also" id="see-also">See also</a></h2>
+<ul>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustdoc/"><code>rustdoc</code> api docs</a></li>
+<li><a href="./rustdoc.html">An overview of <code>rustdoc</code></a></li>
+<li><a href="https://doc.rust-lang.org/nightly/rustdoc/">The rustdoc user guide</a></li>
+</ul>
 
                     </main>
 

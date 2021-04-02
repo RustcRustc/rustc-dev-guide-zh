@@ -167,7 +167,150 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#the-compiler-testing-framework" id="the-compiler-testing-framework">The compiler testing framework</a></h1>
+                        <h1><a class="header" href="#编译器测试框架" id="编译器测试框架">编译器测试框架</a></h1>
+<!-- toc -->
+<p>Rust项目可以运行各种不同的测试，（它们）由构建系统（<code>x.py test</code>）编排。测试编译器本身的主要测试工具是一个叫做compiletest的工具（位于<a href="https://github.com/rust-lang/rust/tree/master/src/tools/compiletest"><code>src/tools/compiletest</code></a>目录）。本节简要介绍如何设置测试框架，然后将会详细介绍<a href="./running.html">如何运行测试</a>和<a href="./adding.html">如果添加新测试</a></p>
+<h2><a class="header" href="#compiletest测试套件" id="compiletest测试套件">Compiletest测试套件</a></h2>
+<p>compiletest测试位于<a href="%C2%A0https://github.com/rust-lang/rust/tree/master/src/test%C2%A0"><code>src/test</code></a>的目录树中。您会在其中看见一系列的子目录（例如<code>ui</code>，<code>run-make</code>等）。每一个这样的目录都被称为<strong>测试套件</strong>-它们包含一组以不同模式运行的测试。</p>
+<p>下列是一个对于测试套件及其含义的简要概述。在某些情况下，测试套件会连接到手册的各部分，以提供更多信息细节。</p>
+<ul>
+<li><a href="(./adding.html#ui)"><code>ui</code></a>-从编译和/或运行测试中检查正确的stdout/stderr的测试</li>
+<li><code>run-pass-valgrind</code>-应该与valgrind一起运行的测试</li>
+<li><code>pretty</code>-针对Rust的“打印美化器”进行测试，从AST生成有效的Rust代码</li>
+<li><code>debuginfo</code>-在gdb或lldb中运行并查找调试信息的测试</li>
+<li><code>codegen</code>-编译然后测试生成的LLVM代码，以确保我们预期的优化生效的测试。欲了解如何编写此类测试的信息，请参见<a href="https://llvm.org/docs/CommandGuide/FileCheck.html">LLVM docs</a></li>
+<li><code>codegen-units</code>-有关<a href="../backend/monomorph.html">单态化</a>和CGU分区的测试</li>
+<li><code>assembly</code>-与<code>codegen</code>测试类似，但会验证程序集输出以确保LLVM目标后端可以处理提供的代码。</li>
+<li><code>mir-opt</code>-检查部分生成的MIR，以确保我们在正确构建事物并且正在进行我们期望的优化的测试。</li>
+<li><code>incremental</code>-针对增量编译的测试，检查当执行某些特定修改后，我们能否重用以前的编译结果</li>
+<li><code>run-make</code>-基本上只执行<code>Makefile</code>的测试，非常的灵活但是编写起来也会非常麻烦。</li>
+<li><code>rustdoc</code>-针对rustdoc的测试，确保生成的文件中含有期望的文档内容。</li>
+<li><code>rustfix</code>-应用了 <a href="../diagnostics.html#suggestions">diagnostic suggestions</a>和<a href="https://github.com/rust-lang/rustfix/"><code>rustfix</code></a> crate的测试</li>
+<li><code>*-fulldeps</code>-与上述相同，单表示测试依赖除<code>std</code>有以外的东西（因此必须构建这些东西）</li>
+</ul>
+<h2><a class="header" href="#其它测试" id="其它测试">其它测试</a></h2>
+<!-- Tidy 是否翻译 -->
+<p>Rust构建系统可以处理其它的各种测试，包括：</p>
+<ul>
+<li><strong>Tidy</strong>-这是一个自定义的工具，用于验证源代码风格和编码规范，例如拒绝长行。在[关于编码规范部分](../conventions.html#formatting）有更多的信息。</li>
+</ul>
+<p>范例：<code>./x.py test tidy</code></p>
+<ul>
+<li><strong>格式</strong>-Rustfmt与构建系统集成在一起，用以在整个编译器中实施统一的样式。在CI中，我们检查格式是否正确。 格式检查也可以通过上述Tidy工具自动运行。</li>
+<li><strong>单元测试</strong>-Rust标准库和许多Rust软件包都包含典型的Rust<code>#[test]</code>单元测试。在后台，<code>x.py</code>将对每个软件包运行<code>cargo test</code>来运行所有测试。</li>
+</ul>
+<p>范例：<code>./x.py test library/std</code></p>
+<ul>
+<li><strong>文档测试</strong>-嵌入在Rust文档中的示例代码是通过<code>rustdoc --test</code>执行的。例如：</li>
+</ul>
+<p><code>./x.py test src/doc</code>-对所有在<code>src/doc</code>中的运行<code>rustdoc --test</code>。</p>
+<p><code>./x.py test --doc library/std</code> -在标准库上运行<code>rustdoc --test</code>。</p>
+<ul>
+<li><strong>链接检查</strong>-一个用于验证文档中的<code>href</code>链接的小工具。</li>
+<li><strong>分发检查</strong>-用于验证由构建系统创建的源代码分发压缩包的解压、构建和运行所有测试。</li>
+</ul>
+<p>范例：<code>./x.py test distcheck</code></p>
+<ul>
+<li>
+<p><strong>工具测试</strong>-Rust随附的软件包也都可以正常运行（通常通过在目录中运行<code>cargo test</code>）。这包括诸如cargo，clippy，rustfmt，rls，miri，bootstrap（测试Rust构建系统本身）之类的东西。</p>
+</li>
+<li>
+<p><strong>Cargo测试</strong>- 这是一个小型的工具，它在一些重要项目（如<code>servo</code>，<code>ripgrep</code>，<code>tokei</code>等）上运行<code>cargo test</code>，以确保没有他们没有任何显著回归。</p>
+</li>
+</ul>
+<p>范例：- <code>./x.py test src/tools/cargotest</code></p>
+<h2><a class="header" href="#测试基础架构" id="测试基础架构">测试基础架构</a></h2>
+<p>当GitHub上一个提交请求（Pull Request）被打开之后,<a href="https://github.com/rust-lang/rust/actions">GitHub Actions</a>将自动启动一个构建，这个构建会在某些配置（x86_64-gnu-llvm-8 linux. x86_64-gnu-tools linux, mingw-check linux）下运行所有测试。本质上，在每个配置构建之后，它会运行<code>./x.py test</code>。</p>
+<p>集成机器人<a href="https://github.com/servo/homu">bors</a>用于协调主分支的合并，当一个PR被批准后，它将会进入一个[队列]，在这里将会使用GitHub Actions在一组广泛的平台上一个个地测试这些合并。由于并行作业数量的限制，除PR外，我们在<a href="https://github.com/rust-lang-ci/rust/actions">rust-lang-ci</a>组织下运行CI。大多数平台仅仅运行构建步骤，一些平台会运行一组受限的测试，只有一个子集可以运行全套的测试（参见 Rust的<a href="https://forge.rust-lang.org/release/platform-support.html#rust-platform-support">platform tiers</a>）</p>
+<h2><a class="header" href="#使用docker镜像进行测试" id="使用docker镜像进行测试">使用Docker镜像进行测试</a></h2>
+<p>Rust树包含<a href="https://github.com/rust-lang/rust/tree/master/src/ci/docker"><code>src/ci/docker</code></a>中GitHub Actions所使用的平台的<a href="https://www.docker.com/">Docker</a>镜像定义。<a href="https://github.com/rust-lang/rust/blob/master/src/ci/docker/run.sh"><code>src/ci/docker/run.sh</code></a>被用于构建、运行Docker镜像，在镜像中构建Rust，然后运行测试。</p>
+<p>您可以在本地开发计算机上运行这些映像。这对于测试与本地系统不同的环境可能会有所帮助。首先，您需要在Linux，Windows或macOS系统上安装Docker（通常Linux将比Windows或macOS快得多，因为稍后将使用虚拟机来模拟Linux环境）。想要在容器中启动bash shell进入交互模式，请运行<code>src/ci/docker/run.sh --dev &lt;IMAGE&gt;</code>，其中<code>&lt;IMAGE&gt;</code>是<code>src/ci/docker</code>中目录名称之一（例如<code>x86_64-gnu</code>是一个相当标准的Ubuntu环境）。</p>
+<p>docker脚本将以只读模式挂载本地rust源树，以读写模式挂载<code>obj</code>目录。所有的编译器工件都将被存储在<code>obj</code>目录中。shell将会从<code>obj</code>目录开始。从那里，您可以运行<code>../src/ci/run.sh</code>，这将运行镜像定义的构建。</p>
+<p>另外，您可以运行单个命令来执行特定的任务。例如，您可以运行<code>python3 ../x.py test src/test/ui</code>来仅运行UI测试。请注意[<code>src / ci / run.sh</code>]脚本中有一些配置可能需要重新创建。特别是，在您的<code>config.toml</code>中设置<code>submodules=false</code>，以便它不会尝试修改只读目录。</p>
+<p>有关使用Docker镜像的一些其他说明：</p>
+<ul>
+<li>
+<p>一些std测试需要IPv6的支持。Linux上的Docker似乎默认禁用了它。在创建容器之前，运行<a href="https://github.com/rust-lang/rust/blob/master/src/ci/scripts/enable-docker-ipv6.sh"><code>enable-docker-ipv6.sh</code></a>中的命令以启用IPv6。这仅需要执行一次。</p>
+</li>
+<li>
+<p>当您退出shell之后，容器将自动删除，但是构建工件仍然保留在<code>obj</code>目录中。如果您在不同的Docker映像之间切换，则存储在<code>obj</code>目录中的先前环境中的工件可能会混淆构建系统。有时候在容器内构建之前，您需要删除部分或全部<code>obj</code>目录。</p>
+</li>
+<li>
+<p>容器是一个只有最小数量的包的准系统，您可能需要安装<code>apt install less vim</code>之类的东西。</p>
+</li>
+<li>
+<p>您可以在容器内打开多个shell。首先您需要知道容器的名字（一个简短的哈希），它显示在shell的提示符中，或者您可以在容器外部运行<code>docker container ls</code>列出可用的容器。使用容器名称运行<code>docker exec -it &lt;CONTAINER&gt; /bin/bash</code>，其中<code>&lt;CONTAINER&gt;</code>是例如<code>4ba195e95cef</code>的容器名称。</p>
+</li>
+</ul>
+<h2><a class="header" href="#在远程计算机上运行测试" id="在远程计算机上运行测试">在远程计算机上运行测试</a></h2>
+<p>测试可以在远程计算机上运行（例如：针对不同的架构测试构建）。这通过使用构建计算机上的<code>remote-test-client</code>向<code>remote-test-server</code>发送测试程序并在远程计算机上运行实现。<code>remote-test-server</code>执行测试程序并且将结果返回给构建计算机。<code>remote-test-server</code>提供<em>未经身份验证的远程代码执行</em>，所以在使用它的时候请务必小心。</p>
+<p>为此，首先为远程计算机构建<code>remote-test-server</code>，例如，用RISC-V</p>
+<pre><code class="language-sh">./x.py build src/tools/remote-test-server --target riscv64gc-unknown-linux-gnu
+</code></pre>
+<p>二进制文件将在<code>./build/$HOST_ARCH/stage2-tools/$TARGET_ARCH/release/remote-test-server</code>被创建。将该文件复制到远程计算机。</p>
+<p>在远程计算机上，运行带有<code>remote</code>参数的<code>remote-test-server</code>（以及可选的-v表示详细输出）。 输出应如下所示：</p>
+<pre><code class="language-sh">$ ./remote-test-server -v remote
+starting test server
+listening on 0.0.0.0:12345!
+</code></pre>
+<p>您可以通过连接到远程测试服务器并发送<code>ping\n</code>来测试其是否正常工作。 它应该回复<code>pong</code>：</p>
+<pre><code class="language-sh">$ nc $REMOTE_IP 12345
+ping
+pong
+</code></pre>
+<p>要使用远程运行程序运行测试，请设置<code>TEST_DEVICE_ADDR</code>环境变量，然后照常使用<code>x.py</code>。例如，要对IP地址为<code>1.2.3.4</code>的RISC-V计算机运行<code>ui</code>测试，请使用</p>
+<pre><code class="language-sh">export TEST_DEVICE_ADDR=&quot;1.2.3.4:12345&quot;
+./x.py test src/test/ui --target riscv64gc-unknown-linux-gnu
+</code></pre>
+<p>如果<code>remote-test-server</code>是使用详细标志运行的，则测试计算机上的输出可能类似于</p>
+<pre><code>[...]
+run &quot;/tmp/work/test1007/a&quot;
+run &quot;/tmp/work/test1008/a&quot;
+run &quot;/tmp/work/test1009/a&quot;
+run &quot;/tmp/work/test1010/a&quot;
+run &quot;/tmp/work/test1011/a&quot;
+run &quot;/tmp/work/test1012/a&quot;
+run &quot;/tmp/work/test1013/a&quot;
+run &quot;/tmp/work/test1014/a&quot;
+run &quot;/tmp/work/test1015/a&quot;
+run &quot;/tmp/work/test1016/a&quot;
+run &quot;/tmp/work/test1017/a&quot;
+run &quot;/tmp/work/test1018/a&quot;
+[...]
+</code></pre>
+<p>测试实在运行<code>x.py</code>的计算机上构建的而不是在远程计算机上。意外构建错误的测试可能会失败，并且将无需在远程计算机上运行。</p>
+<h2><a class="header" href="#在模拟器上测试" id="在模拟器上测试">在模拟器上测试</a></h2>
+<p>某些平台已通过仿真器针对尚不可用的体系结构进行了测试。对于良好支持标准库和宿主系统支持TCP/IP网络的体系结构，请参见上述有关在远程计算机上测试的说明（在这种情况下将模拟远程计算机）</p>
+<p>这是一组用于在仿真环境中协调运行测试的工具。设置了诸如 <code>arm-android</code> 和<code>arm-unknown-linux-gnueabihf</code>之类的平台，以在GitHub Actions的仿真下自动运行测试。接下来我们将窥探一下如何在仿真下运行目标测试。</p>
+<p><a href="https://github.com/rust-lang/rust/tree/master/src/ci/docker/host-x86_64/armhf-gnu/Dockerfile">armhf-gnu</a>的Docker镜像包含<a href="https://www.qemu.org/">QEMU</a>来模拟ARM CPU架构.Rust树中包含的工具<a href="https://github.com/rust-lang/rust/tree/master/src/tools/remote-test-client">remote-test-client</a>和<a href="https://github.com/rust-lang/rust/tree/master/src/tools/remote-test-server">remote-test-server</a>是将测试程序和库发送到仿真计算机，并在仿真计算机中运行测试并读取结果的程序。Docker被设置为启动<code>remote-test-server</code> ，并且用<code>remote-test-server</code>来构建工具与服务器通信以协调正在运行的测试。（请参阅<a href="https://github.com/rust-lang/rust/tree/master/src/bootstrap/test.rs">src/bootstrap/test.rs</a>）</p>
+<blockquote>
+<p>TODO:
+是否支持使用IOS模拟器？</p>
+<p>同时我也也不清楚wasm或asm.js测试如何运行</p>
+</blockquote>
+<h2><a class="header" href="#crater" id="crater">Crater</a></h2>
+<p><a href="https://github.com/rust-lang/crater">Crater</a>是一个为<a href="https://crates.io">crates.io</a>中的<em>每个</em>测试进行编译和运行的工具。它主要用于当实施潜在的重要更改时，检查破坏的程度，并且通过运行beta和stable编译器版本来确保没有破坏。</p>
+<h3><a class="header" href="#何时运行crater" id="何时运行crater">何时运行Crater</a></h3>
+<p>如果您的PR对编译器造成了很大更改或者可能导致损坏，那么您应该运行crater。如果您不确定，请随时询问您的PR审阅者。</p>
+<h3><a class="header" href="#要求运行crater" id="要求运行crater">要求运行Crater</a></h3>
+<p>rust小组维护了一些机器，这些机器可以用来PR引入修改下运行crater。如果您的PR需要运行cater，请在PR线中为会审小组留下评论。请告知团队是否需要运行<code>check-only</code>crater，运行<code>build-only</code>crater或者运行<code>build-and-test</code>crater。区别主要时间。保守选项（如果您不确定）是运行build-and-test。如果您的修改仅在编译时（例如，实现新trait）起作用，那么您只需要check run。</p>
+<p>会审小组会将您的PR入队，并且在结果准备好时将结果发布。check run大约需要3~4天，其它两个平均需要5~6天。</p>
+<p>尽管crater非常有用，但注意一些注意事项也很重要：</p>
+<ul>
+<li>并非所有代码都在crates.io上！ 也有很多代码在GitHub和其它地方的仓库中。此外，公司可能不希望发布其代码。因此，crater运行成功并不是万无一失的神奇绿灯。您仍然需要小心。</li>
+<li>Crater仅在x86_64上运行Linux构建。 因此，其它体系结构和平台没有测试。最重要的是，这包括Windows。</li>
+<li>许多crate未经测试。许多crate未经测试。这可能有很多原因，包括crate不再编译（例如使用的旧的nightly特性），测试失败或不稳定，需要网络访问或其他原因。</li>
+<li>在crater运行之前，必须先使用<code>@bors try</code>来成功构建工件。这意味着，如果您的代码无法编译，则无法运行crater。</li>
+</ul>
+<h2><a class="header" href="#性能运行" id="性能运行">性能运行</a></h2>
+<p>为了改善编译器的性能并防止性能下降，需要进行大量工作。“性能运行”用于比较大量流行crate在不同配置下编译器的性能。不同的配置包括“新构建”，带有增量编译的构建等。</p>
+<p>性能运行的结果是两个版本的编译器之间的比较（通过它们的提交哈希（commit hash））。</p>
+<p>如果您的PR可能会影响性能，尤其是可能对性能产生不利影响，则应请求进行性能测试。</p>
+<h2><a class="header" href="#进一步阅读" id="进一步阅读">进一步阅读</a></h2>
+<p>以下博客文章也可能会引起您的兴趣：</p>
+<ul>
+<li>brson的经典文章[“如何测试Rust”] <a href="https://brson.github.io/2017/07/10/how-rust-is-tested">howtest</a></li>
+</ul>
 
                     </main>
 

@@ -167,7 +167,19 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#type-checking" id="type-checking">Type checking</a></h1>
+                        <h1><a class="header" href="#类型检查" id="类型检查">类型检查</a></h1>
+<p><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/index.html"><code>rustc_typeck</code></a> crate 包含&quot;类型收集&quot;和&quot;类型检查&quot;的源代码，和其它一些相关功能。(它很大程度依赖于<a href="./type-inference.html">type inference</a>和<a href="./traits/resolution.html">trait solving</a>。)</p>
+<h2><a class="header" href="#类型收集" id="类型收集">类型收集</a></h2>
+<p>类型&quot;收集&quot;是将用户写入的语法内容 HIR(<code>hir::Ty</code>) 中的类型转化为编译器使用的<strong>内部表示</strong>(<code>Ty&lt;'tcx&gt;</code>)的过程 – 对 where 子句和函数签名的其他位也进行类似的转换。</p>
+<p>为了尝试并感受到这种差异，请考虑下面的函数:</p>
+<pre><code class="language-rust ignore">struct Foo { }
+fn foo(x: Foo, y: self::Foo) { ... }
+//        ^^^     ^^^^^^^^^
+</code></pre>
+<p>这两个参数 <code>x</code> 和 <code>y</code> 有相同的类型: 但他们是不懂的 <code>hir::Ty</code> 节点。这些节点有不同的 span，当然它们的编码路径也有所不同。但它们一旦&quot;被收集&quot;到 <code>Ty&lt;'tcx&gt;</code> 节点，它们会使用完全相同的内部类型。</p>
+<p>集合被定义为计算关于正在编译的 crate 中的各种函数、特性和其他项的信息的一组<a href="./query.html">查询</a>。请注意，每个查询都与<em>过程间</em>事物有关——例如，对于函数定义，集合将计算出函数的类型和签名，但它不会以任何方式访问<em>函数体</em>，也不会检查局部变量的类型注释(这是类型<em>检查</em>的工作)。</p>
+<p>更多有关详细信息，请参阅 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/collect/"><code>collect</code></a> 模块。</p>
+<p><strong>TODO</strong>: 实际上谈到类型检查...</p>
 
                     </main>
 

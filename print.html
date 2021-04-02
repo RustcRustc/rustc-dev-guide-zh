@@ -398,11 +398,282 @@ LLVM version: 11.0
 <h1><a class="header" href="#suggested-workflows" id="suggested-workflows">Suggested Workflows</a></h1>
 <h1><a class="header" href="#distribution-artifacts" id="distribution-artifacts">Distribution artifacts</a></h1>
 <h1><a class="header" href="#documenting-compiler" id="documenting-compiler">Documenting Compiler</a></h1>
-<h1><a class="header" href="#rustdoc" id="rustdoc">Rustdoc</a></h1>
+<h1><a class="header" href="#rustdoc-概述" id="rustdoc-概述">Rustdoc 概述</a></h1>
+<p>Rustdoc 实际上直接使用了 rustc 的内部功能。
+它与编译器和标准库一起存在于代码树中。
+本章是关于它如何工作的。
+有关Rustdoc功能及其使用方法的信息，请参见 <a href="https://doc.rust-lang.org/nightly/rustdoc/">Rustdoc book</a>。
+有关rustdoc如何工作的更多详细信息，请参见 [“Rustdoc 内部工作原理” 一章]。</p>
+<p>[“Rustdoc 内部工作原理” 一章]：./rustdoc-internals.md</p>
+<p>Rustdoc 完全在 <a href="https://github.com/rust-lang/rust/tree/master/src/librustdoc"><code>librustdoc</code></a> crate 中实现。
+它可以运行编译器来获取 crate 的内部表示（HIR），
+以及查询项目类型的一些信息。
+<a href="./hir.html">HIR</a> 和 [查询] 在相应的章节中进行了讨论。</p>
+<p><code>librustdoc</code> 主要执行两个步骤来渲染一组文档：</p>
+<ul>
+<li>将 AST “清理”为更适合于创建文档的形式（并且稍微更耐编译器中的“搅动”）。</li>
+<li>使用此清理后的 AST 一次渲染一个 crate 的文档。</li>
+</ul>
+<p>当然实际上并不仅限于此，这样描述简化了许多细节，但这只是一个高层次的概述。</p>
+<p>（注意：<code>librustdoc</code> 是一个库 crate！
+&quot;rustdoc&quot; 二进制文件是使用 <a href="https://github.com/rust-lang/rust/tree/master/src/tools/rustdoc"><code>src/tools/rustdoc</code></a> 
+中的项目创建的。注意所有上述操作都是在 <code>librustdoc</code> crate 的 <code>lib.rs</code> 中的 <code>main</code> 函数中执行的。）</p>
+<h2><a class="header" href="#cheat-sheet" id="cheat-sheet">Cheat sheet</a></h2>
+<ul>
+<li>
+<p>使用 <code>./x.py build</code> 制作一个可以在其他项目上运行的 rustdoc。</p>
+<ul>
+<li>添加 <code>library/test</code> 之后才能使用 <code>rustdoc --test</code>。</li>
+<li>如果您以前使用过 <code>rustup toolchain link local /path/to/build/$TARGET/stage1</code>，则在执行上一个构建命令后，<code>cargo +local doc</code> 将可以正常工作。</li>
+</ul>
+</li>
+<li>
+<p>使用 <code>./x.py doc --stage 1 library/std</code> 来用这个 rustdoc 来生成标准库文档。</p>
+<ul>
+<li>生成的文档位于 <code>build/$TARGET/doc/std</code>, 但这个生成出来的 bundle 期望你将其从 <code>doc</code> 文件夹拷贝到一个 web 服务器上，以便首页和 CSS/JS 可以正常加载。</li>
+</ul>
+</li>
+<li>
+<p>使用 <code>x.py test src/test/rustdoc*</code> 来用 stage1 rustdoc 运行测试。</p>
+<ul>
+<li>参见 [“Rustdoc 内部工作原理” 一章] 来了解更多和测试有关的信息。</li>
+</ul>
+</li>
+<li>
+<p>大多数 HTML 打印代码位于 <code>html/format.rs</code> 和 <code>html/render.rs</code>中。
+它主要由一堆 <code>fmt::Display</code> 实现和补充函数构成。</p>
+</li>
+<li>
+<p>上面实现了 <code>Display</code> 的类型是在 <code>clean/mod.rs</code> 中定义的，
+就在自定义 <code>Clean</code> trait 旁边，该 trait 用于将这些类型的对象从 rustc HIR 中提取出来。</p>
+</li>
+<li>
+<p>使用 rustdoc 进行测试的代码在 <code>test.rs</code> 中。</p>
+</li>
+<li>
+<p>Markdown 渲染器位于 <code>html/markdown.rs</code> 中，包括用于从给定的 Markdown 块中提取文档测试的功能。</p>
+</li>
+<li>
+<p>rustdoc <em>输出</em> 上的测试位于 <code>src/test/rustdoc</code> 中，由 rustbuild 的测试运行器和补充脚本 <code>src/etc/htmldocck.py</code> 处理。</p>
+</li>
+<li>
+<p>搜索索引生成的测试位于 <code>src/test/rustdoc-js</code> 中，是一系列 JavaScript 文件，用于对标准库搜索索引和预期结果的查询进行编码。 </p>
+</li>
+</ul>
 <h1><a class="header" href="#ctags" id="ctags">ctags</a></h1>
 <h1><a class="header" href="#adding-a-new-target" id="adding-a-new-target">Adding a new target</a></h1>
-<h1><a class="header" href="#the-compiler-testing-framework" id="the-compiler-testing-framework">The compiler testing framework</a></h1>
-<h1><a class="header" href="#running-tests" id="running-tests">Running tests</a></h1>
+<h1><a class="header" href="#编译器测试框架" id="编译器测试框架">编译器测试框架</a></h1>
+<!-- toc -->
+<p>Rust项目可以运行各种不同的测试，（它们）由构建系统（<code>x.py test</code>）编排。测试编译器本身的主要测试工具是一个叫做compiletest的工具（位于<a href="https://github.com/rust-lang/rust/tree/master/src/tools/compiletest"><code>src/tools/compiletest</code></a>目录）。本节简要介绍如何设置测试框架，然后将会详细介绍<a href="tests/./running.html">如何运行测试</a>和<a href="tests/./adding.html">如果添加新测试</a></p>
+<h2><a class="header" href="#compiletest测试套件" id="compiletest测试套件">Compiletest测试套件</a></h2>
+<p>compiletest测试位于<a href="tests/%C2%A0https://github.com/rust-lang/rust/tree/master/src/test%C2%A0"><code>src/test</code></a>的目录树中。您会在其中看见一系列的子目录（例如<code>ui</code>，<code>run-make</code>等）。每一个这样的目录都被称为<strong>测试套件</strong>-它们包含一组以不同模式运行的测试。</p>
+<p>下列是一个对于测试套件及其含义的简要概述。在某些情况下，测试套件会连接到手册的各部分，以提供更多信息细节。</p>
+<ul>
+<li><a href="tests/(./adding.html#ui)"><code>ui</code></a>-从编译和/或运行测试中检查正确的stdout/stderr的测试</li>
+<li><code>run-pass-valgrind</code>-应该与valgrind一起运行的测试</li>
+<li><code>pretty</code>-针对Rust的“打印美化器”进行测试，从AST生成有效的Rust代码</li>
+<li><code>debuginfo</code>-在gdb或lldb中运行并查找调试信息的测试</li>
+<li><code>codegen</code>-编译然后测试生成的LLVM代码，以确保我们预期的优化生效的测试。欲了解如何编写此类测试的信息，请参见<a href="https://llvm.org/docs/CommandGuide/FileCheck.html">LLVM docs</a></li>
+<li><code>codegen-units</code>-有关<a href="tests/../backend/monomorph.html">单态化</a>和CGU分区的测试</li>
+<li><code>assembly</code>-与<code>codegen</code>测试类似，但会验证程序集输出以确保LLVM目标后端可以处理提供的代码。</li>
+<li><code>mir-opt</code>-检查部分生成的MIR，以确保我们在正确构建事物并且正在进行我们期望的优化的测试。</li>
+<li><code>incremental</code>-针对增量编译的测试，检查当执行某些特定修改后，我们能否重用以前的编译结果</li>
+<li><code>run-make</code>-基本上只执行<code>Makefile</code>的测试，非常的灵活但是编写起来也会非常麻烦。</li>
+<li><code>rustdoc</code>-针对rustdoc的测试，确保生成的文件中含有期望的文档内容。</li>
+<li><code>rustfix</code>-应用了 <a href="tests/../diagnostics.html#suggestions">diagnostic suggestions</a>和<a href="https://github.com/rust-lang/rustfix/"><code>rustfix</code></a> crate的测试</li>
+<li><code>*-fulldeps</code>-与上述相同，单表示测试依赖除<code>std</code>有以外的东西（因此必须构建这些东西）</li>
+</ul>
+<h2><a class="header" href="#其它测试" id="其它测试">其它测试</a></h2>
+<!-- Tidy 是否翻译 -->
+<p>Rust构建系统可以处理其它的各种测试，包括：</p>
+<ul>
+<li><strong>Tidy</strong>-这是一个自定义的工具，用于验证源代码风格和编码规范，例如拒绝长行。在[关于编码规范部分](../conventions.html#formatting）有更多的信息。</li>
+</ul>
+<p>范例：<code>./x.py test tidy</code></p>
+<ul>
+<li><strong>格式</strong>-Rustfmt与构建系统集成在一起，用以在整个编译器中实施统一的样式。在CI中，我们检查格式是否正确。 格式检查也可以通过上述Tidy工具自动运行。</li>
+<li><strong>单元测试</strong>-Rust标准库和许多Rust软件包都包含典型的Rust<code>#[test]</code>单元测试。在后台，<code>x.py</code>将对每个软件包运行<code>cargo test</code>来运行所有测试。</li>
+</ul>
+<p>范例：<code>./x.py test library/std</code></p>
+<ul>
+<li><strong>文档测试</strong>-嵌入在Rust文档中的示例代码是通过<code>rustdoc --test</code>执行的。例如：</li>
+</ul>
+<p><code>./x.py test src/doc</code>-对所有在<code>src/doc</code>中的运行<code>rustdoc --test</code>。</p>
+<p><code>./x.py test --doc library/std</code> -在标准库上运行<code>rustdoc --test</code>。</p>
+<ul>
+<li><strong>链接检查</strong>-一个用于验证文档中的<code>href</code>链接的小工具。</li>
+<li><strong>分发检查</strong>-用于验证由构建系统创建的源代码分发压缩包的解压、构建和运行所有测试。</li>
+</ul>
+<p>范例：<code>./x.py test distcheck</code></p>
+<ul>
+<li>
+<p><strong>工具测试</strong>-Rust随附的软件包也都可以正常运行（通常通过在目录中运行<code>cargo test</code>）。这包括诸如cargo，clippy，rustfmt，rls，miri，bootstrap（测试Rust构建系统本身）之类的东西。</p>
+</li>
+<li>
+<p><strong>Cargo测试</strong>- 这是一个小型的工具，它在一些重要项目（如<code>servo</code>，<code>ripgrep</code>，<code>tokei</code>等）上运行<code>cargo test</code>，以确保没有他们没有任何显著回归。</p>
+</li>
+</ul>
+<p>范例：- <code>./x.py test src/tools/cargotest</code></p>
+<h2><a class="header" href="#测试基础架构" id="测试基础架构">测试基础架构</a></h2>
+<p>当GitHub上一个提交请求（Pull Request）被打开之后,<a href="https://github.com/rust-lang/rust/actions">GitHub Actions</a>将自动启动一个构建，这个构建会在某些配置（x86_64-gnu-llvm-8 linux. x86_64-gnu-tools linux, mingw-check linux）下运行所有测试。本质上，在每个配置构建之后，它会运行<code>./x.py test</code>。</p>
+<p>集成机器人<a href="https://github.com/servo/homu">bors</a>用于协调主分支的合并，当一个PR被批准后，它将会进入一个[队列]，在这里将会使用GitHub Actions在一组广泛的平台上一个个地测试这些合并。由于并行作业数量的限制，除PR外，我们在<a href="https://github.com/rust-lang-ci/rust/actions">rust-lang-ci</a>组织下运行CI。大多数平台仅仅运行构建步骤，一些平台会运行一组受限的测试，只有一个子集可以运行全套的测试（参见 Rust的<a href="https://forge.rust-lang.org/release/platform-support.html#rust-platform-support">platform tiers</a>）</p>
+<h2><a class="header" href="#使用docker镜像进行测试" id="使用docker镜像进行测试">使用Docker镜像进行测试</a></h2>
+<p>Rust树包含<a href="https://github.com/rust-lang/rust/tree/master/src/ci/docker"><code>src/ci/docker</code></a>中GitHub Actions所使用的平台的<a href="https://www.docker.com/">Docker</a>镜像定义。<a href="https://github.com/rust-lang/rust/blob/master/src/ci/docker/run.sh"><code>src/ci/docker/run.sh</code></a>被用于构建、运行Docker镜像，在镜像中构建Rust，然后运行测试。</p>
+<p>您可以在本地开发计算机上运行这些映像。这对于测试与本地系统不同的环境可能会有所帮助。首先，您需要在Linux，Windows或macOS系统上安装Docker（通常Linux将比Windows或macOS快得多，因为稍后将使用虚拟机来模拟Linux环境）。想要在容器中启动bash shell进入交互模式，请运行<code>src/ci/docker/run.sh --dev &lt;IMAGE&gt;</code>，其中<code>&lt;IMAGE&gt;</code>是<code>src/ci/docker</code>中目录名称之一（例如<code>x86_64-gnu</code>是一个相当标准的Ubuntu环境）。</p>
+<p>docker脚本将以只读模式挂载本地rust源树，以读写模式挂载<code>obj</code>目录。所有的编译器工件都将被存储在<code>obj</code>目录中。shell将会从<code>obj</code>目录开始。从那里，您可以运行<code>../src/ci/run.sh</code>，这将运行镜像定义的构建。</p>
+<p>另外，您可以运行单个命令来执行特定的任务。例如，您可以运行<code>python3 ../x.py test src/test/ui</code>来仅运行UI测试。请注意[<code>src / ci / run.sh</code>]脚本中有一些配置可能需要重新创建。特别是，在您的<code>config.toml</code>中设置<code>submodules=false</code>，以便它不会尝试修改只读目录。</p>
+<p>有关使用Docker镜像的一些其他说明：</p>
+<ul>
+<li>
+<p>一些std测试需要IPv6的支持。Linux上的Docker似乎默认禁用了它。在创建容器之前，运行<a href="https://github.com/rust-lang/rust/blob/master/src/ci/scripts/enable-docker-ipv6.sh"><code>enable-docker-ipv6.sh</code></a>中的命令以启用IPv6。这仅需要执行一次。</p>
+</li>
+<li>
+<p>当您退出shell之后，容器将自动删除，但是构建工件仍然保留在<code>obj</code>目录中。如果您在不同的Docker映像之间切换，则存储在<code>obj</code>目录中的先前环境中的工件可能会混淆构建系统。有时候在容器内构建之前，您需要删除部分或全部<code>obj</code>目录。</p>
+</li>
+<li>
+<p>容器是一个只有最小数量的包的准系统，您可能需要安装<code>apt install less vim</code>之类的东西。</p>
+</li>
+<li>
+<p>您可以在容器内打开多个shell。首先您需要知道容器的名字（一个简短的哈希），它显示在shell的提示符中，或者您可以在容器外部运行<code>docker container ls</code>列出可用的容器。使用容器名称运行<code>docker exec -it &lt;CONTAINER&gt; /bin/bash</code>，其中<code>&lt;CONTAINER&gt;</code>是例如<code>4ba195e95cef</code>的容器名称。</p>
+</li>
+</ul>
+<h2><a class="header" href="#在远程计算机上运行测试" id="在远程计算机上运行测试">在远程计算机上运行测试</a></h2>
+<p>测试可以在远程计算机上运行（例如：针对不同的架构测试构建）。这通过使用构建计算机上的<code>remote-test-client</code>向<code>remote-test-server</code>发送测试程序并在远程计算机上运行实现。<code>remote-test-server</code>执行测试程序并且将结果返回给构建计算机。<code>remote-test-server</code>提供<em>未经身份验证的远程代码执行</em>，所以在使用它的时候请务必小心。</p>
+<p>为此，首先为远程计算机构建<code>remote-test-server</code>，例如，用RISC-V</p>
+<pre><code class="language-sh">./x.py build src/tools/remote-test-server --target riscv64gc-unknown-linux-gnu
+</code></pre>
+<p>二进制文件将在<code>./build/$HOST_ARCH/stage2-tools/$TARGET_ARCH/release/remote-test-server</code>被创建。将该文件复制到远程计算机。</p>
+<p>在远程计算机上，运行带有<code>remote</code>参数的<code>remote-test-server</code>（以及可选的-v表示详细输出）。 输出应如下所示：</p>
+<pre><code class="language-sh">$ ./remote-test-server -v remote
+starting test server
+listening on 0.0.0.0:12345!
+</code></pre>
+<p>您可以通过连接到远程测试服务器并发送<code>ping\n</code>来测试其是否正常工作。 它应该回复<code>pong</code>：</p>
+<pre><code class="language-sh">$ nc $REMOTE_IP 12345
+ping
+pong
+</code></pre>
+<p>要使用远程运行程序运行测试，请设置<code>TEST_DEVICE_ADDR</code>环境变量，然后照常使用<code>x.py</code>。例如，要对IP地址为<code>1.2.3.4</code>的RISC-V计算机运行<code>ui</code>测试，请使用</p>
+<pre><code class="language-sh">export TEST_DEVICE_ADDR=&quot;1.2.3.4:12345&quot;
+./x.py test src/test/ui --target riscv64gc-unknown-linux-gnu
+</code></pre>
+<p>如果<code>remote-test-server</code>是使用详细标志运行的，则测试计算机上的输出可能类似于</p>
+<pre><code>[...]
+run &quot;/tmp/work/test1007/a&quot;
+run &quot;/tmp/work/test1008/a&quot;
+run &quot;/tmp/work/test1009/a&quot;
+run &quot;/tmp/work/test1010/a&quot;
+run &quot;/tmp/work/test1011/a&quot;
+run &quot;/tmp/work/test1012/a&quot;
+run &quot;/tmp/work/test1013/a&quot;
+run &quot;/tmp/work/test1014/a&quot;
+run &quot;/tmp/work/test1015/a&quot;
+run &quot;/tmp/work/test1016/a&quot;
+run &quot;/tmp/work/test1017/a&quot;
+run &quot;/tmp/work/test1018/a&quot;
+[...]
+</code></pre>
+<p>测试实在运行<code>x.py</code>的计算机上构建的而不是在远程计算机上。意外构建错误的测试可能会失败，并且将无需在远程计算机上运行。</p>
+<h2><a class="header" href="#在模拟器上测试" id="在模拟器上测试">在模拟器上测试</a></h2>
+<p>某些平台已通过仿真器针对尚不可用的体系结构进行了测试。对于良好支持标准库和宿主系统支持TCP/IP网络的体系结构，请参见上述有关在远程计算机上测试的说明（在这种情况下将模拟远程计算机）</p>
+<p>这是一组用于在仿真环境中协调运行测试的工具。设置了诸如 <code>arm-android</code> 和<code>arm-unknown-linux-gnueabihf</code>之类的平台，以在GitHub Actions的仿真下自动运行测试。接下来我们将窥探一下如何在仿真下运行目标测试。</p>
+<p><a href="https://github.com/rust-lang/rust/tree/master/src/ci/docker/host-x86_64/armhf-gnu/Dockerfile">armhf-gnu</a>的Docker镜像包含<a href="https://www.qemu.org/">QEMU</a>来模拟ARM CPU架构.Rust树中包含的工具<a href="https://github.com/rust-lang/rust/tree/master/src/tools/remote-test-client">remote-test-client</a>和<a href="https://github.com/rust-lang/rust/tree/master/src/tools/remote-test-server">remote-test-server</a>是将测试程序和库发送到仿真计算机，并在仿真计算机中运行测试并读取结果的程序。Docker被设置为启动<code>remote-test-server</code> ，并且用<code>remote-test-server</code>来构建工具与服务器通信以协调正在运行的测试。（请参阅<a href="https://github.com/rust-lang/rust/tree/master/src/bootstrap/test.rs">src/bootstrap/test.rs</a>）</p>
+<blockquote>
+<p>TODO:
+是否支持使用IOS模拟器？</p>
+<p>同时我也也不清楚wasm或asm.js测试如何运行</p>
+</blockquote>
+<h2><a class="header" href="#crater" id="crater">Crater</a></h2>
+<p><a href="https://github.com/rust-lang/crater">Crater</a>是一个为<a href="https://crates.io">crates.io</a>中的<em>每个</em>测试进行编译和运行的工具。它主要用于当实施潜在的重要更改时，检查破坏的程度，并且通过运行beta和stable编译器版本来确保没有破坏。</p>
+<h3><a class="header" href="#何时运行crater" id="何时运行crater">何时运行Crater</a></h3>
+<p>如果您的PR对编译器造成了很大更改或者可能导致损坏，那么您应该运行crater。如果您不确定，请随时询问您的PR审阅者。</p>
+<h3><a class="header" href="#要求运行crater" id="要求运行crater">要求运行Crater</a></h3>
+<p>rust小组维护了一些机器，这些机器可以用来PR引入修改下运行crater。如果您的PR需要运行cater，请在PR线中为会审小组留下评论。请告知团队是否需要运行<code>check-only</code>crater，运行<code>build-only</code>crater或者运行<code>build-and-test</code>crater。区别主要时间。保守选项（如果您不确定）是运行build-and-test。如果您的修改仅在编译时（例如，实现新trait）起作用，那么您只需要check run。</p>
+<p>会审小组会将您的PR入队，并且在结果准备好时将结果发布。check run大约需要3~4天，其它两个平均需要5~6天。</p>
+<p>尽管crater非常有用，但注意一些注意事项也很重要：</p>
+<ul>
+<li>并非所有代码都在crates.io上！ 也有很多代码在GitHub和其它地方的仓库中。此外，公司可能不希望发布其代码。因此，crater运行成功并不是万无一失的神奇绿灯。您仍然需要小心。</li>
+<li>Crater仅在x86_64上运行Linux构建。 因此，其它体系结构和平台没有测试。最重要的是，这包括Windows。</li>
+<li>许多crate未经测试。许多crate未经测试。这可能有很多原因，包括crate不再编译（例如使用的旧的nightly特性），测试失败或不稳定，需要网络访问或其他原因。</li>
+<li>在crater运行之前，必须先使用<code>@bors try</code>来成功构建工件。这意味着，如果您的代码无法编译，则无法运行crater。</li>
+</ul>
+<h2><a class="header" href="#性能运行" id="性能运行">性能运行</a></h2>
+<p>为了改善编译器的性能并防止性能下降，需要进行大量工作。“性能运行”用于比较大量流行crate在不同配置下编译器的性能。不同的配置包括“新构建”，带有增量编译的构建等。</p>
+<p>性能运行的结果是两个版本的编译器之间的比较（通过它们的提交哈希（commit hash））。</p>
+<p>如果您的PR可能会影响性能，尤其是可能对性能产生不利影响，则应请求进行性能测试。</p>
+<h2><a class="header" href="#进一步阅读" id="进一步阅读">进一步阅读</a></h2>
+<p>以下博客文章也可能会引起您的兴趣：</p>
+<ul>
+<li>brson的经典文章[“如何测试Rust”] <a href="https://brson.github.io/2017/07/10/how-rust-is-tested">howtest</a></li>
+</ul>
+<h1><a class="header" href="#运行测试" id="运行测试">运行测试</a></h1>
+<p>您可以使用x.py来运行测试。这是最基本的命令-您几乎永远不想使用它！–如下：</p>
+<pre><code>./x.py test
+</code></pre>
+<p>这将构建第1阶段的编译器，然后运行整个测试套件。 您可能不想经常执行此操作，因为这需要很长时间，并且无论如何bors/GitHub Actions都会为您执行此操作。（通常，在打开我认为已完成的PR后，我会在后台运行此命令，但很少这样做。-nmatsakis）</p>
+<p>测试结果将被缓存，并且在测试过程中以前成功的测试将被<code>忽略</code>。stdout/stderr内容以及每个测试的时间戳文件都可以在build/ARCH/test/下找到。要强制重新运行测试（例如，如果测试运行程序未能注意到更改），您只需删除时间戳文件即可。</p>
+<p>请注意，某些测试需要启用支持Python的gdb。您可以通过在gdb中使用<code>python</code>命令来测试gdb安装是否支持Python。调用后，您可以输入一些Python代码（例如<code>print（&quot;hi&quot;）</code>），然后返回，然后再按CTRL + D执行它。如果要从源代码构建gdb，则需要使用<code>--with-python = &lt;path-to-python-binary&gt;</code>进行配置。</p>
+<h2><a class="header" href="#运行部分测试套件" id="运行部分测试套件">运行部分测试套件</a></h2>
+<p>在特定PR上工作时，您通常将需要运行少量测试。例如，可以在修改rustc之后使用一个好的“冒烟测试”，以查看事物是否正常运行，如下所示：</p>
+<pre><code class="language-bash">./x.py test src/test/{ui,compile-fail}
+</code></pre>
+<p>这将运行<code>ui</code>和<code>compile-fail</code>测试套件。当然，测试套件的选择有些随意，并且可能不适合您正在执行的任务。例如，如果您正在使用debuginfo进行调试，那么使用debuginfo测试套件可能会更好：</p>
+<pre><code class="language-bash">./x.py test src/test/debuginfo
+</code></pre>
+<p>如果您只需要为任何给定的测试套件测试特定的测试子目录，则可以将该目录传递给<code>x.py test</code>：</p>
+<pre><code class="language-bash">./x.py test src/test/ui/const-generics
+</code></pre>
+<p>同样，您可以通过传递单个文件的路径来测试该文件：</p>
+<pre><code class="language-bash">./x.py test src/test/ui/const-generics/const-test.rs
+</code></pre>
+<h3><a class="header" href="#只运行整洁测试脚本" id="只运行整洁测试脚本">只运行整洁测试脚本</a></h3>
+<pre><code class="language-bash">./x.py test tidy
+</code></pre>
+<h3><a class="header" href="#在标准库上运行测试" id="在标准库上运行测试">在标准库上运行测试</a></h3>
+<pre><code class="language-bash">./x.py test --stage 0 library/std
+</code></pre>
+<h3><a class="header" href="#运行整洁测试脚本并且在标准库上运行测试" id="运行整洁测试脚本并且在标准库上运行测试">运行整洁测试脚本并且在标准库上运行测试</a></h3>
+<pre><code class="language-bash">./x.py test --stage 0 tidy library/std
+</code></pre>
+<h3><a class="header" href="#使用阶段1编译器在标准库上运行测试" id="使用阶段1编译器在标准库上运行测试">使用阶段1编译器在标准库上运行测试</a></h3>
+<pre><code class="language-bash">./x.py test library/std
+</code></pre>
+<p>通过列出要运行的测试套件，可以避免为根本没有更改的组件运行测试。</p>
+<p><strong>警告：<strong>请注意，bors仅在完整的第2阶段构建中运行测试；因此，尽管测试在第1阶段</strong>通常</strong>可以正常进行，但仍有一些局限。</p>
+<h2><a class="header" href="#运行单个测试" id="运行单个测试">运行单个测试</a></h2>
+<p>人们想要做的另一件事是运行<strong>单个测试</strong>，通常是他们试图修复的测试。如前所述，您可以传递完整的文件路径来实现这一目标，或者可以使用<code>--test-args</code>选项调用<code>x.py</code>：</p>
+<pre><code class="language-bash">./x.py test src/test/ui --test-args issue-1234
+</code></pre>
+<p>在后台，测试运行程序调用标准rust测试运行程序（与您在<code>#[test]</code>中获得的运行程序相同），因此此命令将最终筛选出名称中包含<code>issue-1234</code>的测试。（因此，<code>--test-args</code>是运行相关测试集合的好方法。）</p>
+<h2><a class="header" href="#编辑和更新参考文件" id="编辑和更新参考文件">编辑和更新参考文件</a></h2>
+<p>如果您有意更改了编译器的输出，或者正在进行新的测试，那么您可以将<code>--bless</code>传递给test子命令。例如，如果<code>src/test/ui</code>中的某些测试失败，则可以运行</p>
+<pre><code class="language-bash">./x.py test src/test/ui --bless
+</code></pre>
+<p>来自动调整<code>.stderr</code>，<code>.stdout</code>或者<code>.fixed</code>文件中的所有测试。当然，您也可以使用<code>--test-args your_test_name</code>标志来定位特定的测试，就像运行测试时一样。</p>
+<h2><a class="header" href="#传递--pass-mode" id="传递--pass-mode">传递<code>--pass $mode</code></a></h2>
+<p>通过UI测试现在具有三种模式：<code>check-pass</code>， <code>build-pass</code> 和<code>run-pass</code>。当传递<code>--pass $mode</code>时，这些测试将被强制在给定的<code>$mode</code>下运行，除非指令测试文件存在指令<code>//ignore-pass</code>。您可以将<code>src/test/ui</code>中的所有测试作为<code>check-pass</code>运行：</p>
+<pre><code class="language-bash">./x.py test src/test/ui --pass check
+</code></pre>
+<p>通过传递<code>--pass $mode</code>，可以减少测试时间。对于每种模式，请参见<a href="tests/./adding.html#%E4%B8%8D%E4%BC%9A%E5%AF%BC%E8%87%B4%E7%BC%96%E8%AF%91%E9%94%99%E8%AF%AF%E7%9A%84%E6%B5%8B%E8%AF%95%C2%A0">此处</a>。</p>
+<h2><a class="header" href="#使用增量编译" id="使用增量编译">使用增量编译</a></h2>
+<p>您可以进一步启用<code>--incremental</code>标志，以在以后的重建中节省更多时间：</p>
+<pre><code class="language-bash">./x.py test src/test/ui --incremental --test-args issue-1234
+</code></pre>
+<p>如果您不想在每个命令中都包含该标志，则可以在<code>config.toml</code>中启用它：</p>
+<pre><code class="language-toml">[rust]
+incremental = true
+</code></pre>
+<p>请注意，增量编译将使用比平常更多的磁盘空间。如果您担心磁盘空间，则可能需要不时地检查<code>build</code>目录的大小。</p>
+<h2><a class="header" href="#使用不同的比较模式运行测试" id="使用不同的比较模式运行测试">使用不同的“比较模式”运行测试</a></h2>
+<p>UI测试可能会有不同的输出，具体取决于编译器所处的特定“模式”。例如，当处于“非词法作用域生命周期”（&quot;non-lexical liftimes&quot;,NLL）模式时，测试<code>foo.rs</code>将首先在<code>foo.nll.stderr</code>中寻找期望的输出，如果没有找到，则回到寻常的<code>foo.stderr</code>。要以NLL模式运行UI测试套件，可以使用以下命令：</p>
+<pre><code class="language-bash">./x.py test src/test/ui --compare-mode=nll
+</code></pre>
+<p>其它比较模式的示例是&quot;noopt&quot;，&quot;migrat&quot;和<a href="tests/./adding.html#%E7%89%88%E6%9C%AC">revisions</a>。</p>
+<h2><a class="header" href="#手动运行测试" id="手动运行测试">手动运行测试</a></h2>
+<p>有时候，手动进行测试会更容易，更快捷。 大多数测试只是<code>rs</code>文件，因此您可以执行操作类似</p>
+<pre><code class="language-bash">rustc +stage1 src/test/ui/issue-1234.rs
+</code></pre>
+<p>这要快得多，但并不总是有效。例如，某些测试包含指定特定的编译器标志或依赖于其它crate的指令，并且如果没有这些选项，它们可能无法以相同的方式运行。</p>
 <h1><a class="header" href="#添加新测试" id="添加新测试">添加新测试</a></h1>
 <!-- toc -->
 <p><strong>总体而言，我们希望每个修复rustc错误的PR都能够有一些相应的回归测试</strong> 。这些测试在修复之前是错误的但是在PR之后应该是通过的。这些测试能有效的防止我们重复过去的错误。</p>
@@ -1063,7 +1334,7 @@ fn test_foo() {
 <p><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_interface/index.html"><code>rustc_interface</code></a> 是一个不稳定的查询系统的包装，用于帮助推动编译的各个阶段。 </p>
 <p>其他编译器中的的消费者（例如 <code>rustdoc</code> 或者甚至是 rust-analyzer）可以以不同的方式使用此接口。 </p>
 <p><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_driver/index.html"><code>rustc_driver</code></a> crate 首先解析命令行参数，然后使<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_interface/index.html"><code>rustc_interface</code></a>驱动编译完成。</p>
-<h2><a class="header" href="#rustdoc-1" id="rustdoc-1">rustdoc</a></h2>
+<h2><a class="header" href="#rustdoc" id="rustdoc">rustdoc</a></h2>
 <p><code>rustdoc</code> 的大部分位于 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustdoc/index.html"><code>librustdoc</code></a> 中。 但是，<code>rustdoc</code>二进制文件本身 <a href="https://github.com/rust-lang/rust/tree/master/src/tools/rustdoc"><code>src/tools/rustdoc</code></a>，除了调用 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustdoc/fn.main.html"><code>rustdoc::main</code></a>外，它什么都不做。 在 [<code>src/tools/ rustdoc-js</code>] 和 <a href="https://github.com/rust-lang/rust/tree/master/src/tools/rustdoc-themes"><code>src/tools/rustdoc-themes</code></a> 中，还有 rustdocs 的 javascript 和 CSS。 您可以在<a href="./rustdoc.html">本章</a>中阅读有关 rustdoc 的更多信息。 </p>
 <h2><a class="header" href="#测试" id="测试">测试</a></h2>
 <p>以上所有内容的测试套件都在 <a href="https://github.com/rust-lang/rust/tree/master/src/test"><code>src/test/</code></a> 中。 您可以在<a href="./tests/intro.html">本章</a>中了解有关测试套件的更多信息。 测试工具本身在 <a href="https://github.com/rust-lang/rust/tree/master/src/tools/compiletest"><code>src/tools/compiletest</code></a> 中。 </p>
@@ -1359,8 +1630,203 @@ impl&lt;D: Decoder&gt; Decodable&lt;D&gt; for MyStruct {
 <h2><a class="header" href="#specialization" id="specialization">Specialization</a></h2>
 <p>少数类型，特别是 <code>DefId</code>，针对不同的 <code>Encoder</code> 需要采用不同的实现。目前，这是通过 ad-hoc 专门处理:
 <code>DefId</code> 有一个 <code>default</code> 实现 <code>Encodable&lt;E&gt;</code> 和一个专有的 <code>Encodable&lt;CacheEncoder&gt;</code>。</p>
-<h1><a class="header" href="#parallel-compilation" id="parallel-compilation">Parallel Compilation</a></h1>
-<h1><a class="header" href="#rustdoc-2" id="rustdoc-2">Rustdoc</a></h1>
+<h1><a class="header" href="#并行编译" id="并行编译">并行编译</a></h1>
+<p>大多数编译器都不是并行的，这是一个提高编译器性能的机会。</p>
+<p>截止<!-- date: 2021-01 --> 2021 年 1 月，用于显式并行化编译器的工作已停止。有很多设计和正确性的工作需要完成。</p>
+<p>可以在 <code>config.toml</code> 中启用它来尝试当前的并行编译器工作。</p>
+<p>这项工作有一些基本思路：</p>
+<ul>
+<li>编译器中有很多循环，它们只是迭代一个 crate 中的所有项，。这些都可能可以并行化。</li>
+<li>我们可以使用(一个自定义分支) <a href="https://crates.io/crates/rayon"><code>rayon</code></a> 并行运行任务。自定义分支允许执行 DAG 任务，而不仅仅是树。</li>
+<li>目前有许多全局数据结构需要设置为线程安全的。这里的一个关键策略是将内部可变的数据结构(如: Cell) 转换为与它们同级的线程安全结构(如: Mutex)。</li>
+</ul>
+<p>截至<!-- date: 2021-02 --> 2021 年 2 月，由于人力不足，大部分这方面的努力被搁置。我们有一个可以正常工作的原型，在许多情况下都有很好的性能收益。然而，有两个障碍：</p>
+<ul>
+<li>
+<p>目前尚不清楚哪些并发需要保持不变的不变性。审核工作正在进行中，但似乎已停滞不前。</p>
+</li>
+<li>
+<p>有很多锁竞争，随着线程数增加到 4 以上，实际上会降低性能。</p>
+</li>
+</ul>
+<p>这里有一些可以用来学习更多的资源(注意其中一些有点过时了)：</p>
+<ul>
+<li><a href="https://internals.rust-lang.org/t/parallelizing-rustc-using-rayon/6606">Zoxc 的 IRLO 线程，这项工作的先驱之一</a></li>
+<li><a href="https://github.com/nikomatsakis/rustc-parallelization/blob/master/interior-mutability-list.md">nikomatsakis 在编译器中列出的内部可变性</a></li>
+<li><a href="https://internals.rust-lang.org/t/help-test-parallel-rustc/11503">alexchricton 关于 IRLO 线程的性能</a></li>
+<li><a href="https://github.com/rust-lang/rust/issues/48685">跟踪该问题</a></li>
+</ul>
+<h1><a class="header" href="#rustdoc-内部工作原理" id="rustdoc-内部工作原理">Rustdoc 内部工作原理</a></h1>
+<!-- toc -->
+<p>本页介绍了 rustdoc 的 pass 和模式。有关rustdoc的概述，
+请参阅<a href="./rustdoc.html">“Rustdoc概述”一章</a>。</p>
+<h2><a class="header" href="#从-crate-到-clean" id="从-crate-到-clean">从 crate 到 clean</a></h2>
+<p>在 core.rs 中有两个主要项目：<code>DocContext</code> 结构和 <code>run_core</code> 函数。
+后者会让 <code>rustdoc</code> 调用 <code>rustc</code> 将 crate  编译到 <code>rustdoc</code> 可以接手的地步。
+前者是状态容器，用于在 crate 中爬取信息时收集其文档。</p>
+<p>crate 爬取的主要过程是通过几个在 <code>clean/mod.rs</code> 中的 <code>Clean</code> trait 实现完成的。
+<code>Clean</code> trait 是一个转换 trait，它定义了一个方法：</p>
+<pre><code class="language-rust ignore">pub trait Clean&lt;T&gt; {
+    fn clean(&amp;self, cx: &amp;DocContext) -&gt; T;
+}
+</code></pre>
+<p><code>clean/mod.rs</code> 还定义了稍后用于渲染文档页面的 “clean 过的” AST 类型。
+通常，对于每个 <code>Clean</code> 的实现，都会从 rustc 中获取一些 AST 或 HIR 类型，
+并将其转换为适当的“clean 过的”的类型。
+更“大型”的构造（例如模块或相关项目）可能会在其 <code>Clean</code> 实现中进行一些额外的处理，
+但是在大多数情况下，这些实现都是直接的转换。
+该模块的入口是 <code>impl Clean&lt;Crate&gt; for visit_ast::RustdocVisitor</code>，由上面的 <code>run_core</code> 调用。</p>
+<p>您看，我实际上前面撒了一点小谎：
+在 <code>clean/mod.rs</code> 中的事件发生之前，还有另一个AST转换。
+在 <code>visit_ast.rs</code> 中的 <code>RustdocVisitor</code> 类型<em>实际上</em>抓取了一个
+<code>rustc_hir::Crate</code> 以获取第一个中间表示形式，
+该中间表示形式在 <code>doctree.rs</code> 中定义。
+此过程主要是为了获得有关 HIR 类型的一些中间包装，并处理可见性和内联。
+这是处理 <code>#[doc(inline)]</code>、 <code>#[doc(no_inline)]</code> 和 <code>#[doc(hidden)]</code> 的地方，
+以及决定 pub use 是否应该渲染为一整页还是模块页面中的“Reexport”行。</p>
+<p>在 <code>clean/mod.rs</code> 中发生的另一件主要事情是将 doc 注释和 <code>#[doc=&quot;&quot;]</code> 属性收集到 Attributes 结构的单独字段中，
+这个字段出现在任何需要手写文档的地方。这使得之后容易收集此文档。</p>
+<p>该过程的主要输出是一个 <code>clean::Crate</code>，其中有一个项目树描述了目标 crate 中有公开文档的项目。</p>
+<h3><a class="header" href="#hot-potato" id="hot-potato">Hot potato</a></h3>
+<p>在继续进行下一步之前，在文档会上有一些重要的“pass”。
+这些操作包括将单独的“属性”组合为单个字符串并去除前导空格，
+以使文档能更容易地被 markdown 解析器解析，
+或者删除未公开的项目或使用 <code>#[doc(hidden)]</code> 故意隐藏的项目。
+这些都在 <code>passes/</code> 目录中实现，每文件一个 pass。
+默认情况下，所有这些 pass 都会在 crate 进行，
+但是与私有/隐藏的条目有关的 pass 可以通过将 <code>--document-private-items</code> 传入 rustdoc来绕过。
+请注意，与之前的 AST 转换组不同，这些 pass 是在 <em>cleaned</em> crate 上运行的。</p>
+<p>（严格来说，您可以微调 pass 甚至添加自己的pass，但是<a href="https://github.com/rust-lang/rust/issues/44136">我们正在尝试 deprecate 这种行为</a>。
+如果您需要对这些 pass 进行更细粒度的控制，请告诉我们！）</p>
+<p>以下是截至 <!-- date: 2021-02 --> 2021年2月的 pass 列表：</p>
+<ul>
+<li>
+<p><code>calculate-doc-coverage</code> 计算 <code>--show-coverage</code> 使用的信息。</p>
+</li>
+<li>
+<p><code>check-code-block-syntax</code> 验证 Rust 代码块的语法
+（<code>```rust</code>）</p>
+</li>
+<li>
+<p><code>check-invalid-html-tags</code> 检测 doc comments 中的不合法 HTML（如没有被正确关闭的 <code>&lt;span&gt;</code>）。</p>
+</li>
+<li>
+<p><code>check-non-autolinks</code> 检测可以或者应该使用尖括号写的链接 （这些代码应该由 nightly-only<!-- date: 2021-02 --> 的 lint 选项 <code>non_autolinks</code> 开启）。</p>
+</li>
+<li>
+<p><code>collapse-docs</code> 将所有文档 attributes 拼接成一个文档 attribute。
+这是必须的，因为每行文档注释都是单独的文档 attribute，<code>collapse-docs</code> 会将它们合并成单独的一个字符串，其中每个 attribute 之间都有换行符连接。</p>
+</li>
+<li>
+<p><code>collect-intra-doc-links</code> 解析 <a href="https://doc.rust-lang.org/rustdoc/linking-to-items-by-name.html">intra-doc links</a>。</p>
+</li>
+<li>
+<p><code>collect-trait-impls</code> 为 crate 中的每个项目收集 trait 提示。
+例如，如果我们定义一个实现 trait 的结构，则此过程将注意到该结构实现了该 trait。</p>
+</li>
+<li>
+<p><code>doc-test-lints</code> 在 doctests 上运行各种 lint。</p>
+</li>
+<li>
+<p><code>propagate-doc-cfg</code> 将 <code>#[doc(cfg(...))]</code> 传递给子 item。</p>
+</li>
+<li>
+<p><code>strip-priv-imports</code> 删去所有私有导入语句（<code>use</code>、 <code>extern crate</code>）。
+这是必需的，因为 rustdoc 将通过将项目的文档内联到模块中或创建带有导入的 “Reexport” 部分来处理 <em>公有</em> 导入。
+这个 pass 保证了这些导入能反应在文档上。</p>
+</li>
+<li>
+<p><code>strip-hidden</code> 和 <code>strip-private</code> 从输出中删除所有 <code>doc(hidden)</code> 和 私有 item。
+<code>strip-private</code> 包含了 <code>strip-priv-imports</code>。基本上，目标就是移除和公共文档无关的 item。</p>
+</li>
+<li>
+<p><code>unindent-comments</code> 移除了注释中多余的缩进，以使得 Markdown 能被正确地解析。
+这是必需的，因为编写文档的约定是在 <code>///</code> 或 <code>//!</code> 标记与文档文本之间空一格，但是 Markdown 对空格敏感。
+例如，具有四个空格缩进的文本块会被解析为代码块，因此如果我们不移除注释中的缩进，这些列表项</p>
+<pre><code class="language-rust ignore">/// A list:
+///
+///    - Foo
+///    - Bar
+</code></pre>
+<p>会被违反用户期望地解析为代码块。</p>
+</li>
+</ul>
+<p><code>passes/</code> 中也有一个 <code>stripper</code> 模块，但其中是一些 <code>strip-*</code> pass 使用的工具函数，它并非是一个 pass。</p>
+<h2><a class="header" href="#从-clean-到-crate" id="从-clean-到-crate">从 clean 到 crate</a></h2>
+<p>这是 rustdoc 中“第二阶段”开始的地方。
+这个阶段主要位于 <code>html/</code> 文件夹中，并且以 <code>html/render.rs</code> 中的 <code>run()</code> 开始。
+该代码在渲染这个 crate 的所有文档前会负责设置渲染期间使用的 <code>Context</code>、<code>SharedContext</code> 和 <code>Cache</code>，
+并复制每个渲染文档集中的静态文件（字体，CSS 和 JavaScript 等保存在 <code>html/static/</code> 中的文件），
+创建搜索索引并打印出源代码渲染。</p>
+<p>直接在 <code>Context</code> 上实现的几个函数接受 <code>clean::Crate</code> 参数，
+并在渲染项或其递归模块子项之间建立某种状态。
+从这里开始，通过 <code>html/layout.rs</code> 中的巨大 <code>write!()</code> 调用，开始进行“页面渲染”。
+从项目和文档中实际生成HTML的部分发生在一系列 <code>std::fmt::Display</code> 实现和接受 <code>&amp;mut std::fmt::Formatter</code> 的函数中。
+写出页面正文的顶层实现是 <code>html/render.rs</code> 中的 <code>impl &lt;'a&gt; fmt::Display for Item &lt;'a&gt;</code>，
+它会基于被渲染的 <code>Item</code> 调用多个 <code>item_*</code> 之一。</p>
+<p>根据您要查找的渲染代码的类型，您可能会在 <code>html/render.rs</code> 中找到主要项目，
+例如 “结构体页面应如何渲染” 或者对于较小的组件，对应项目可能在 <code>html/format.rs</code> 中，
+如“我应该如何将 where 子句作为其他项目的一部分进行打印”。</p>
+<p>每当 rustdoc 遇到应在其上打印手写文档的项目时，
+它就会调用 <code>html/markdown.rs</code> 中的与 Markdown 部分的接口。
+其中暴露了一系列包装了字符串 Markdown 的类型，
+并了实现 <code>fmt::Display</code> 以输出 HTML 文本。
+在运行 Markdown 解析器之前，要特别注意启用某些功能（如脚注和表格）并在 Rust 代码块中添加语法高亮显示（通过 <code>html/highlight.rs</code>）。
+这里还有一个函数（<code>find_testable_code</code>），
+该函数专门扫描Rust代码块，以便测试运行程序代码可以在 crate 中找到所有 doctest。</p>
+<h3><a class="header" href="#从-soup-到-nuts" id="从-soup-到-nuts">从 soup 到 nuts</a></h3>
+<p>(另一个标题： <a href="https://www.youtube.com/watch?v=hOLAGYmUQV0">&quot;An unbroken thread that stretches from those first <code>Cell</code>s to us&quot;</a>)</p>
+<p>重要的是要注意，AST 清理可以向编译器询问信息
+（至关重要的是，<code>DocContext</code> 包含 <code>TyCtxt</code>），
+但是页面渲染则不能。在 <code>run_core</code> 中创建的 <code>clean::Crate</code> 在传递给
+<code>html::render::run</code> 之前传递到编译器上下文之外。
+这意味着，在项目定义内无法立即获得的许多“补充数据”，
+例如哪个 trait 是语言使用的 <code>Deref</code> trait，需要在清理过程中收集并存储在 <code>DocContext</code> 中，
+并在 HTML 渲染期间传递给 <code>SharedContext</code>。
+这表现为一堆共享状态，上下文变量和 <code>RefCell</code>。</p>
+<p>还要注意的是，某些来自“请求编译器”的项不会直接进入 <code>DocContext</code> 中 —— 
+例如，当从外部 crate 中加载项时，
+rustdoc 会询问 trait 实现并基于该信息生成新的 <code>Item</code>。
+它直接进入返回的 <code>Crate</code>，而不是通过 <code>DocContext</code>。
+这样，就可以在呈现 HTML 之前将这些实现与其他实现一起收集。 </p>
+<h2><a class="header" href="#其他技巧" id="其他技巧">其他技巧</a></h2>
+<p>所有这些都描述了从 Rust crate 生成HTML文档的过程，
+但是 rustdoc 可以以其他几种主要模式运行。
+它也可以在独立的 Markdown 文件上运行，也可以在 Rust 代码或独立的 Markdown 文件上运行 doctest。
+对于前者，它直接调用 <code>html/markdown.rs</code>，可以通过选项将目录插入到输出 HTML 的模式。</p>
+<p>对于后者，rustdoc 运行类似的部分编译以获取在 <code>test.rs</code> 中的文档的相关信息。 
+但是它并不经过完整的清理和渲染过程，而是运行了一个简单得多的 crate walk，仅抓取手写的文档。
+与上述 <code>html/markdown.rs</code> 中的 <code>find_testable_code</code> 结合，它会建立一组要运行的测试，然后再将其交给测试运行器。
+<code>test.rs</code> 中一个值得注意的的位置是函数 <code>make_test</code>，在该函数中，手写 <code>doctest</code> 被转换为可以执行的东西。</p>
+<p>可以<a href="https://quietmisdreavus.net/code/2018/02/23/how-the-doctests-get-made/">在这里</a>找到一些关于 <code>make_test</code> 的更多信息。</p>
+<h2><a class="header" href="#dotting-is-and-crossing-ts" id="dotting-is-and-crossing-ts">Dotting i's and crossing t's</a></h2>
+<p>所以简而言之，这就是rustdoc的代码，但是 repo 中还有很多事情要处理。
+由于我们手头有完整的 <code>compiletest</code> 套件，因此在 <code>src/test/rustdoc</code> 中有一组测试可以确保最终的 HTML 符合我们在各种情况下的期望。
+这些测试还使用了补充脚本 <code>src/etc/htmldocck.py</code>，
+该脚本允许它使用 XPath 表示法浏览最终的 HTML，以精确查看输出结果。
+rustdoc测试可用的所有命令的完整说明（例如 <a href="https://github.com/rust-lang/rust/blob/master/src/etc/htmldocck.py#L39"><code>@has</code></a> 和 <a href="https://github.com/rust-lang/rust/blob/master/src/etc/htmldocck.py#L44"><code>@matches</code></a>）位于 <a href="https://github.com/rust-lang/rust/blob/master/src/etc/htmldocck.py"><code>htmldocck.py</code></a> 中。</p>
+<p>要在 rustdoc 测试中使用多个 crate，请添加 <code>// aux-build:filename.rs</code>
+到测试文件的顶部。应该将 <code>filename.rs</code> 放置在相对于带有注释的测试文件的 <code>auxiliary</code> 目录中。
+如果您需要为辅助文件构建文档，请使用 <code>// build-aux-docs</code>。</p>
+<p>此外，还有针对搜索索引和 rustdoc 查询它的能力的独立测试 。
+<code>src/test/rustdoc-js</code> 中的文件每个都包含一个不同的搜索查询和预期结果（按“搜索”标签细分）。
+这些文件由 <code>src/tools/rustdoc-js</code> 和 Node.js 运行时中的脚本处理。
+这些测试没有详尽的描述，但是可以在 <code>basic.js</code> 中找到一个包含所有选项卡结果的宽泛示例。
+基本思想是，将给定的 <code>QUERY</code> 与一组 <code>EXPECTED</code> 结果相匹配，并附上每个 item 的完整路径。</p>
+<h2><a class="header" href="#本地测试" id="本地测试">本地测试</a></h2>
+<p>生成的 HTML 文档的某些功能可能需要跨页面使用本地存储，如果没有 HTTP 服务器，这将无法正常工作。
+要在本地测试这些功能，可以运行本地 HTTP 服务器，如下所示： </p>
+<pre><code class="language-bash">$ ./x.py doc library/std --stage 1
+# The documentation has been generated into `build/[YOUR ARCH]/doc`.
+$ python3 -m http.server -d build/[YOUR ARCH]/doc
+</code></pre>
+<p>现在，您可以像浏览 Internet 上的文档一样浏览本地文档。 例如，<code>std</code> 的网址将是 <code>/std/</code>。</p>
+<h2><a class="header" href="#see-also" id="see-also">See also</a></h2>
+<ul>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustdoc/"><code>rustdoc</code> api docs</a></li>
+<li><a href="./rustdoc.html">An overview of <code>rustdoc</code></a></li>
+<li><a href="https://doc.rust-lang.org/nightly/rustdoc/">The rustdoc user guide</a></li>
+</ul>
 <h1><a class="header" href="#第三部分源码表示" id="第三部分源码表示">第三部分：源码表示</a></h1>
 <p>这部分描述了从用户那里获取原始源代码并将其转换为编译器可以轻松处理的各种形式的过程。他们被称作<em>中间表示（IRs）</em>。</p>
 <p>此过程首先从编译器了解用户的要求开始：解析给定的命令行参数并确定要编译的内容。之后，编译器将用户输入转换为一系列 IR ，这些 IR 看起来越来越不像用户写的内容。</p>
@@ -1719,9 +2185,225 @@ algorithm</a> 。 宏解析器定义在 <a href="https://doc.rust-lang.org/night
 <h3><a class="header" href="#custom-derive" id="custom-derive">Custom Derive</a></h3>
 <p>自定义派生是 proc macro 的一种特殊类型。 </p>
 <p>TODO: more?</p>
-<h1><a class="header" href="#name-resolution" id="name-resolution">Name resolution</a></h1>
-<h1><a class="header" href="#test-implementation" id="test-implementation">#[test] Implementation</a></h1>
-<h1><a class="header" href="#panic-implementation" id="panic-implementation">Panic Implementation</a></h1>
+<h1><a class="header" href="#名称解析-1" id="名称解析-1">名称解析</a></h1>
+<!-- toc -->
+<p>在上一个章节，我们看到了如何在展开所有宏的情况下构建 AST。这个过程需要用名称解析（name resolution）来解析导入和宏的名字。在本章中，我们将展示这是如何实现的。</p>
+<p>事实上，我们在展开宏的过程中并不做完全的名称解析 -- 我们只解析导入和宏在这个过程中。这要求知道什么是需要展开。在这之后，在获得整个 AST 之后，我们将执行全名解析来解析 crate 中的所有名称。这发生在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_resolve/late/index.html"><code>rustc_resolve::late</code></a> 中。与宏展开不同，在这个后期展开中，我们只需要尝试解析一个名称一次，因为没有新增的名字，如果失败了，那么将抛出一个编译错误。</p>
+<p>名称解析可能很复杂。这里有几个不同的命名空间（例如，宏，值，类型，生命周期）和名称可能在不同（嵌套的）范围。此外，针对不同类型的名称解析，其解析失败的原因也可能会不同。例如，在一个模块的作用域内，模块中存在尚未展开的宏和未解析的 glob 导入会导致解析失败。另一方面，在函数内，在我们所在的 block 中，外部作用域和全局作用域中都没有该名称会导致解析失败。</p>
+<h2><a class="header" href="#基础" id="基础">基础</a></h2>
+<p>在我们的程序中，我们可以通过给一个变量名，来引用 变量，类型，函数等等。这些名字并不总是唯一的。例如，下面是一个有效 Rust 程序：</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>type x = u32;
+let x: x = 1;
+let y: x = 2;
+<span class="boring">}
+</span></code></pre></pre>
+<p>我们是如何知道 第三行 <code>x</code> 是一个类型 (u32) 还是 数值 (1)。这个冲突将在名称解析中被解析。在这个特殊栗子中，名称解析定义 类型名称（type names） 和 变量名称（variable names） 在独立的命名空间，所以他们可以共存。</p>
+<p>Rust 中的名称解析分为两个阶段。在第一阶段，将运行宏展开，我们将构建一个模块的书结构和解析导入。宏展开和名字解析通过<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast_lowering/trait.ResolverAstLowering.html"><code>ResolverAstLowering</code></a> 特性（trait）来通信。</p>
+<p>输入的第二阶段的输入是语法树，它通过解析输入文件和展开宏。这个阶段将
+从链接源文件中所有的名称到相关关联的地方（即名称被引用的地方）。它还会生成有用的错误信息，如输入错误建议，要导入的特性（trait）或 lints 关于未使用的项。（or lints about
+unused items）</p>
+<p>成功运行第二阶段（<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_resolve/struct.Resolver.html#method.resolve_crate"><code>Resolver::resolve_crate</code></a>) 将创建一个索引，剩余的编译部分可以使用它来查询当前的名称（通过  <code>hir::lowering::Resolver</code> 接口）</p>
+<p>名称解析在 <code>rustc_resolve</code> crate 中，部分内容位于 <code>lib.rs</code> 中，其他模块中有一些帮助程序或 symbol-type logic 。</p>
+<h2><a class="header" href="#命名空间" id="命名空间">命名空间</a></h2>
+<p>不同类型的符号存在于在不同的命名空间中。例如 类型的名称 不与 变量的名称 冲突。这通常不会发生，因为变量以小写字母开头，而类型以大写字母开头。但这仅仅是一种约定。以下 Rust 代码是合法的，并通过编译（带有 warnings）：</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>type x = u32;
+let x: x = 1;
+let y: x = 2; // See? x is still a type here.
+<span class="boring">}
+</span></code></pre></pre>
+<p>为了应对这种情况，并使用这些名称的作用域规则少有不同，解析起将它们分开，并为他们创建不同的机构。</p>
+<p>也就是说，当（code）代码谈到命名空间，它并不代表模块的结构层次，它是 类型 vs 值 vs 宏。</p>
+<h2><a class="header" href="#作用域和-ribs" id="作用域和-ribs">作用域和 ribs</a></h2>
+<p>名称只在源代码的特定区域可见。这形成了一个层次结构，但不一定是简单的-如果一个作用域是另一个作用域的一部分，这不意味在外部可见的名称也是在内部可见的，或指的是同一样内容。</p>
+<p>为了处理这种情况，编译器引入一个 Ribs 概念。这是一种抽象作用域。每每次可见名称可能发生变化时，一个新的 rib 被推入栈中。可能发生这种情况的地方包括：</p>
+<ul>
+<li>明显的地方 - 花括号包围块，函数边界，模块。</li>
+<li>通过 let 绑定引入 - shodow 另一个同名变量。</li>
+<li>宏展开边缘 - 因对宏的卫生（hygiene）</li>
+</ul>
+<p>ribs 栈会由内到外的搜索名称。这有助于找到名称最近的意思（这个名称不会被其他任何东西覆盖）。向外过渡 rib 也可能会改则未使用名称的规则 - 如果这里又一个嵌套的函数（非闭包），内层作用域内不能访问参数和进行本地绑定外层作用域的内容，即使他们在常规作用域规则中应该可见。一个例子：</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn do_something&lt;T: Default&gt;(val: T) { // &lt;- New rib in both types and values (1)
+    // `val` is accessible, as is the helper function
+    // `T` is accessible
+    let helper = || { // New rib on `helper` (2) and another on the block (3)
+        // `val` is accessible here
+    }; // End of (3)
+    // `val` is accessible, `helper` variable shadows `helper` function
+    fn helper() { // &lt;- New rib in both types and values (4)
+        // `val` is not accessible here, (4) is not transparent for locals)
+        // `T` is not accessible here
+    } // End of (4)
+    let val = T::default(); // New rib (5)
+    // `val` is the variable, not the parameter here
+} // End of (5), (2) and (1)
+<span class="boring">}
+</span></code></pre></pre>
+<p>因为对于不同作用域的规则有所不同，每个作用域会有他自己独立的与命名空间并行构造的 rib 栈。此外，也有对于那些没有完整命名空间的 local lables 也有一个 rib 栈（例如 loops 或者 blocks 的名称）。</p>
+<h2><a class="header" href="#总体策略" id="总体策略">总体策略</a></h2>
+<p>为了执行整个 crate 的名称解析，自上而下的遍历语法树，并解析每个遇到的名称。这适用于大多数类型的名称，因为在使用名称时，已经在 Rib 层次结构中引入了该名称。</p>
+<p>这里有一些例外，一些会有些棘手，因为它们甚至可以在遇到之前就可以使用 - 因此需要扫描每一个项去填满 Rib。</p>
+<p>其他甚至更有问题的导入，需要递归的定点解析和宏，需要在处理剩下代码之前进行解析和展开。</p>
+<p>因此，名称解析是在多个阶段执行的。</p>
+<h2><a class="header" href="#speculative-crate-loading" id="speculative-crate-loading">Speculative crate loading</a></h2>
+<p>为了给出有用的错误，rustc 建议将未找到的路径导入作用域中。它是怎么做到的呢？他会检查每一个 crate 的每一个模块，并寻找可能的匹配项。这甚至包括还没有加载的 crate。</p>
+<p>为尚未加载的导入的提供导入建议被称为_speculative crate loading_，因为不应报告任何遇到的错误：决定去加载这些导入的并非用户。执行此功能的函数是在 <code>rustc_resolve/src/diagnostics.rs</code> 中的<code>lookup_import_candidates</code>。</p>
+<p>为了 speculative loads 和用户的加载，解析通过传递一个  <code>record_used</code> 参数，当 speculative loads 时候，值为 false。</p>
+<h2><a class="header" href="#todo" id="todo">TODO:</a></h2>
+<p>这是第一遍学习代码的结果。绝对是不完整的，不够详细的。在某系地方也可能不准确。不过，它可能在将来能提供有用的帮助。</p>
+<ul>
+<li>它究竟链接到什么？后续的编译阶段如何发布和使用该链接？
+谁调用它以及如何实际使用它。</li>
+<li>它是通过，然后仅使用结果，还是可以递增计算（例如，对于RLS）？</li>
+<li>总体策略描述有点模糊。</li>
+<li>Rib这个名字来自哪里？</li>
+<li>这东西有自己的测试，还是仅作为某些端到端测试的一部分进行测试？</li>
+</ul>
+<h1><a class="header" href="#test-属性" id="test-属性"><code>#[test]</code> 属性</a></h1>
+<!-- toc -->
+<p>今天，Rust 程序员依赖于称为 <code>#[test]</code> 的内置属性。您需要做的只是将一个函数标记为测试（test），并包含一些 断言（asserts），如下所示：</p>
+<pre><code class="language-rust ignore">#[test]
+fn my_test() {
+    assert!(2+2 == 4);
+}
+</code></pre>
+<p>当程序使用 <code>rustc --test</code> 或 <code>cargo test</code> 命令进行编译的时候，它将生成可运行该程序及其他测试函数的可执行文件。这种测试方式允许所有测试于代码并存。你甚至可以将测试放入到私有模块中：</p>
+<pre><code class="language-rust ignore">mod my_priv_mod {
+    fn my_priv_func() -&gt; bool {}
+
+    #[test]
+    fn test_priv_func() {
+        assert!(my_priv_func());
+    }
+}
+</code></pre>
+<p>此外，可以很容易的测试私有项目，而不用担心如何将它们导出给任何类型的外部测试设备。这是 Rust 中 工效（ergonomics）测试的关键。然而从语法上讲，这是相当奇怪的。如果这些函数是不可见的（private）的，主函数如何调用他们呢？<code>rustc --test</code> 是怎么做到的？</p>
+<p>编译器中的 <a href="https://github.com/rust-lang/rust/tree/master/compiler/rustc_ast"><code>rustc_ast</code> crate</a> 为 <code>#[test]</code> 实现了语法转译。本质上这是一个 fancy 的宏，它通过三个步骤重写了 crate。</p>
+<h2><a class="header" href="#step-1-重新导出re-exporting" id="step-1-重新导出re-exporting">Step 1: 重新导出（Re-Exporting）</a></h2>
+<p>如前所述，测试可以存在于私有模块内部，因此我们需要一种在不破坏现有代码的情况下将其暴露给主函数。因此 <code>rustc_ast</code> 将创建一个名为 <code>__test_reexports</code>  的本地模块，该模块递归地重复导出（Re-Exporting）测试。此扩展的代码示例转换为：</p>
+<pre><code class="language-rust ignore">mod my_priv_mod {
+    fn my_priv_func() -&gt; bool {}
+
+    pub fn test_priv_func() {
+        assert!(my_priv_func());
+    }
+
+    pub mod __test_reexports {
+        pub use super::test_priv_func;
+    }
+}
+</code></pre>
+<p>现在，可以通过 <code>my_priv_mod::__test_reexports::test_priv_func</code> 访问我们的测试。对于更深的模块结构，<code>__test_reexports</code> 讲重新导出包含测试模块，因此位于 <code>a::b::my_test</code> 将变成 <code>a::__test_reexports::b::__test_reexports::my_test</code>。尽管此过程看起来很安全，但是如果当前已存在 <code>__test_reexports</code> 模块会怎么样？答案：并不要紧。</p>
+<p>为了解释，我们需要了解 AST 如何表示标识符（<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/symbol/struct.Ident.html">how the AST represents
+identifiers</a>）。每个函数，变量，模块的名称都不直接存储为 string，而是存储为不透明的 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_span/symbol/struct.Symbol.html">Symbol</a>，它本质是每个标识符的 ID 号。编译器保留一个独立的哈希表，使我们可以在必要时（例如在打印语法错误时）恢复人类可读的 Symbol 名称。当编译器生成 <code>__test_reexports</code> 模块是，它会为标识符生成一个新的符号，因此尽管编译器生成的<code>__test_reexports</code>  可能与您创建的包共享一个名称，但不会共享一个 Symbol 。此技术可以防止在代码生成过程中发生名称冲突，这是 Rust 宏卫生（hygiene）的基础</p>
+<h2><a class="header" href="#step-2-harness-generation" id="step-2-harness-generation">Step 2: Harness Generation</a></h2>
+<p>现在我们可以从 crate 根目录访问我们的测试，我们需要对它们进行一些操作。 <code>rustc_ast</code> 生成如下模块：</p>
+<pre><code class="language-rust ignore">#[main]
+pub fn main() {
+    extern crate test;
+    test::test_main_static(&amp;[&amp;path::to::test1, /*...*/]);
+}
+</code></pre>
+<p>其中 <code>path::to::test1</code> 是类型 <code>test::TestDescAndFn</code> 的常量。</p>
+<p>尽管这种转换很简单，但它使我们对测试的实际运行方式有很多了解。将测试汇总到一个数组中，然后传递给名称为 <code>test_main_static</code> 的测试运行器。我们将返回到 <code>TestDescAndFn</code> 到底是什么，但是现在，关键点是有一个名为 <a href="https://doc.rust-lang.org/test/index.html"><code>test</code></a> crate，它是 Rust Core 的一部分，他实现了测试所有运行时，<code>test</code> 接口是不稳定的，所以与它交互的唯一方式是通过 <code>#[test]</code> 宏。</p>
+<h2><a class="header" href="#step-3-test-object-generation" id="step-3-test-object-generation">Step 3: Test Object Generation</a></h2>
+<p>如果您以前用 Rust 编写过测试，那么您可能熟悉一些测试函数上可用的一些可选属性。例如，如果我们预测测试会 panic ，可以用 <code>#[should_panic]</code> 来注释测试。看起来是如下的：</p>
+<pre><code class="language-rust ignore">#[test]
+#[should_panic]
+fn foo() {
+    panic!(&quot;intentional&quot;);
+}
+</code></pre>
+<p>这意味着我们的测试不仅仅是简单的函数，它们也有配置信息。<code>test</code> 将这个配置数据编码到一个名为 <a href="https://doc.rust-lang.org/test/struct.TestDesc.html"><code>TestDesc</code></a> 的结构体中。对于 crate 中的每一个测试函数，<code>rustc_ast</code> 将解析其属性并生成 <code>TestDesc</code> 实例。然后它将 <code>TestDesc</code> 和 test 函数组合到可预测名称的 <code>TestDescAndFn</code>  结构体中，<code>test_main_static</code> 对其进行操作。对于给定的测试，生成 <code>TestDescAndFn</code> 实例如下：</p>
+<pre><code class="language-rust ignore">self::test::TestDescAndFn{
+  desc: self::test::TestDesc{
+    name: self::test::StaticTestName(&quot;foo&quot;),
+    ignore: false,
+    should_panic: self::test::ShouldPanic::Yes,
+    allow_fail: false,
+  },
+  testfn: self::test::StaticTestFn(||
+    self::test::assert_test_result(::crate::__test_reexports::foo())),
+}
+</code></pre>
+<p>一旦我们构建了这些测试对象的数组，它们就会通过步骤2中生成的管理传递给测试运行器。</p>
+<h2><a class="header" href="#检查生成的代码" id="检查生成的代码">检查生成的代码</a></h2>
+<p>在 nightly rust 中，有一个不稳定的标签叫做 <code>unpretty</code> ，你可以使用它在宏展开后打印出模块的源代码：</p>
+<pre><code class="language-bash">$ rustc my_mod.rs -Z unpretty=hir
+</code></pre>
+<h1><a class="header" href="#rust-中的-panic" id="rust-中的-panic">rust 中的 panic</a></h1>
+<!-- toc -->
+<h2><a class="header" href="#步骤1-调用-panic-宏" id="步骤1-调用-panic-宏">步骤1: 调用 <code>panic!</code> 宏</a></h2>
+<p>实际上有两个 panic 宏 - 一个定义在 <code>core</code> 中，一个定义在 <code>std</code> 中。这是因为 <code>core</code> 中的代码可能 panic。<code>core</code> 是在 <code>std</code> 之前构建的，但不管是 <code>core</code> 或 <code>std</code> 中的 panic，我们希望运行时使用相同的机制。</p>
+<h3><a class="header" href="#core-中-panic-的定义" id="core-中-panic-的定义">core 中 panic! 的定义</a></h3>
+<p><code>core</code> <code>panic!</code> 宏最终调用如下 (在 <code>library/core/src/panicking.rs</code>):</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// 注意 这个函数永远不会越过 FFI 边界; 这是一个 Rust 到 Rust 的调用
+extern &quot;Rust&quot; {
+    #[lang = &quot;panic_impl&quot;]
+    fn panic_impl(pi: &amp;PanicInfo&lt;'_&gt;) -&gt; !;
+}
+
+let pi = PanicInfo::internal_constructor(Some(&amp;fmt), location);
+unsafe { panic_impl(&amp;pi) }
+<span class="boring">}
+</span></code></pre></pre>
+<p>实际上解决该问题需要通过几个间接层:</p>
+<ol>
+<li>
+<p>在 <code>compiler/rustc_middle/src/middle/weak_lang_items.rs</code> 中，<code>panic_impl</code> 用 <code>rust_begin_unwind</code> 声明标记为 '弱 lang 项'。在 <code>rustc_typeck/src/collect.rs</code> 中将实际符号名设置为 <code>rust_begin_unwind</code>。</p>
+<p>注意 <code>panic_impl</code> 被声明在一个 <code>extern &quot;Rust&quot;</code> 块中，这意味着 core 将尝试调用一个名为 <code>rust_begin_unwind</code> 的外部符号(在链接时解决)</p>
+</li>
+<li>
+<p>在 <code>library/std/src/panicking.rs</code> 中，我们有这样的定义:</p>
+</li>
+</ol>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>/// core crate panic 的进入点。
+#[cfg(not(test))]
+#[panic_handler]
+#[unwind(allowed)]
+pub fn begin_panic_handler(info: &amp;PanicInfo&lt;'_&gt;) -&gt; ! {
+    ...
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>特殊 <code>panic_handler</code> 属性是通过 <code>compiler/rustc_middle/src/middle/lang_items</code> 解析。<code>extract</code> 函数将 <code>panic_handler</code> 属性转换一个 <code>panic_impl</code> lang 项。</p>
+<p>现在，我们在 <code>std</code> 中有一个匹配的 <code>panic_handler</code> lang 项。这个函数与定义在 <code>core</code> 中的 <code>extern { fn panic_impl }</code> 经过相同的过程，最终得到一个名为 <code>rust_begin_unwind</code> 的符号。在链接时，<code>core</code> 中的符号引用将被解析为 <code>std</code> 中的定义(Rust 源中调用 <code>begin_panic_handler</code>)。</p>
+<p>因此，控制流将在运行时从 core 传递到 std。 这允许来自 core 的 panic 使用和其它 panic 相同的基础结构(panic 钩子，unwinding 等)</p>
+<h3><a class="header" href="#std-中-panic-的实现" id="std-中-panic-的实现">std 中 panic! 的实现</a></h3>
+<p>这就是真正的 panic 相关逻辑开始的地方。在 <code>library/std/src/panicking.rs</code>，控制传递给 <code>rust_panic_with_hook</code>。这个方法负责调用全局 panic 钩子，并检查是否出现双重 panic。最后，调用由 panic 运行时提供的 <code>__rust_start_panic</code>。</p>
+<p>对 <code>__rust_start_panic</code> 的调用非常奇怪 - 它被传递给 <code>*mut &amp;mut dyn BoxMeUp</code>，转换成一个 <code>usize</code>。一起分解一下这种类型:</p>
+<ol>
+<li>
+<p><code>BoxMeUp</code> 是一个内部 trait。它是给 <code>PanicPayload</code>
+(用户提供的有效负载类型的包装器)实现的，并且有一个方法<code>fn box_me_up(&amp;mut self) -&gt; *mut (dyn Any + Send)</code>。这个方法获取用户提供的有效负载 (<code>T: Any + Send</code>)，将其打包，并将其转换为一个原始指针。</p>
+</li>
+<li>
+<p>当我们调用 <code>__rust_start_panic</code> 时，会得到一个 <code>&amp;mut dyn BoxMeUp</code>。但是，这是一个胖指针 (是 <code>usize</code> 的两倍大)。为了跨 FFI 边界上将其传递给 panic 运行时，我们对<em>的可变引用</em> (<code>&amp;mut &amp;mut dyn BoxMeUp</code>)进行可变引用，并将其转换为原始指针(<code>*mut &amp;mut dyn BoxMeUp</code>)。外部的原始指针是一个瘦指针，它指向一个 <code>Sized</code> 类型 (一个可变引用)。因此，可以将这个瘦指针转换为一个 <code>usize</code>，它适用于跨 FFI 边界传递。</p>
+</li>
+</ol>
+<p>最后，调用使用 <code>usize</code> 调用 <code>__rust_start_panic</code> 。现在进入 panic 运行时。</p>
+<h2><a class="header" href="#步骤-2-panic-运行时" id="步骤-2-panic-运行时">步骤 2: panic 运行时</a></h2>
+<p>Rust 提供两个 panic 运行时: <code>panic_abort</code> 和 <code>panic_unwind</code>。用户可以在构建时通过 <code>Cargo.toml</code> 在它们之间进行选择</p>
+<p><code>panic_abort</code> 非常简单: 正如你所期望的那样，它实现 <code>__rust_start_panic</code> 只为中断。</p>
+<p><code>panic_unwind</code> 是更有趣的情况。</p>
+<p>在它的实现 <code>__rust_start_panic</code> 中，我们使用 <code>usize</code>，将其转换回 <code>*mut &amp;mut dyn BoxMeUp</code>，解引用它，并调用 <code>&amp;mut dyn BoxMeUp</code> 上的  <code>box_me_up</code>。在这个指针中，我们有一个指向负载本身的原始指针 (一个 <code>*mut (dyn Send + Any)</code>): 即一个指向调用 <code>panic!</code> 的用户提供真实值的原始指针。</p>
+<p>至此，与平台无关的代码结束。现在，我们现在调用特定于平台的展开逻辑 (例如 <code>unwind</code>)。这个代码负责展开栈，运行与每个帧(当前，运行析构函数)相关联的所有 'landing pads'，并将控制权转移到 <code>catch_unwind</code> 帧。</p>
+<p>请注意，所有 panic 要么中止进程，要么被调用的 <code>catch_unwind</code> 捕获: 在 <code>library/std/src/rt.rs</code> 中，调用用户提供的
+<code>main</code> 函数是包装在 <code>catch_unwind</code> 中。</p>
 <h1><a class="header" href="#ast-validation" id="ast-validation">AST Validation</a></h1>
 <h1><a class="header" href="#feature-gate-checking" id="feature-gate-checking">Feature Gate Checking</a></h1>
 <h1><a class="header" href="#hir" id="hir">HIR</a></h1>
@@ -1780,10 +2462,144 @@ HIR 的许多部分都非常类似于普通 Rust 的语法，但是 Rust 中的�
 <p><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/struct.Body.html"><code>rustc_hir::Body</code></a> 代表某种可以执行的代码，例如函数/闭包的函数体或常量的定义。
 body 与一个<strong>所有者</strong>相关联，“所有者”通常是某种Item（例如，<code>fn()</code>或<code>const</code>），但也可以是闭包表达式（例如， <code>|x, y| x + y</code>）。
 您可以使用 HIR 映射来查找与给定 def-id（<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/hir/map/struct.Map.html#method.maybe_body_owned_by"><code>maybe_body_owned_by</code></a>）关联的body，或找到 body 的所有者（<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/hir/map/struct.Map.html#method.body_owner_def_id"><code>body_owner_def_id</code></a>）。</p>
-<h1><a class="header" href="#lowering-ast-to-hir" id="lowering-ast-to-hir">Lowering AST to HIR</a></h1>
+<h1><a class="header" href="#lowering" id="lowering">Lowering</a></h1>
+<p>Lowering 步骤将 AST 转换为 <a href="hir.html">HIR</a>。 
+这意味着许多在类型分析或类似的语法无关分析中没有用的代码在这一阶段被删除了。
+这种结构的例子包括但不限于</p>
+<ul>
+<li>括号
+<ul>
+<li>无需替换，直接删除，树结构本身就能明确运算顺序</li>
+</ul>
+</li>
+<li><code>for</code> 循环和 <code>while (let)</code> 循环
+<ul>
+<li>转换为 <code>loop</code> + <code>match</code> 和一些 <code>let</code> binding</li>
+</ul>
+</li>
+<li><code>if let</code>
+<ul>
+<li>转换为 <code>match</code></li>
+</ul>
+</li>
+<li>Universal <code>impl Trait</code>
+<ul>
+<li>转换成范型参数（会添加flag来标志这些参数不是由用户写的）</li>
+</ul>
+</li>
+<li>Existential <code>impl Trait</code>
+<ul>
+<li>转换为虚拟的 <code>existential type</code> 声明</li>
+</ul>
+</li>
+</ul>
+<p>Lowering 需要遵守几点，否则就会违反 <code>src/librustc_middle/hir/map/hir_id_validator.rs</code> 中的制定的检查规则：</p>
+<ol>
+<li>如果创建了一个<code>HirId</code>，那就必须使用它。
+因此，如果您使用了 <code>lower_node_id</code>，则<em>必须</em>使用生成的 <code>NodeId</code> 或 <code>HirId</code>（两个都可以，因为检查 <code>HIR</code> 中的 <code>NodeId</code> 时也会检查是否存在现有的 <code>HirId</code>）</li>
+<li>Lowering <code>HirId</code> 必须在对 item 有所有权的作用域内完成。
+这意味着如果要创建除当前正在 Lower 的 item 之外的其他 item，则需要使用 <code>with_hir_id_owner</code>。
+例如，在lower existential的 <code>impl Trait</code> 时会发生这种情况.</li>
+<li>即使其 <code>HirId</code> 未使用，要放入HIR结构中的 <code>NodeId</code> 也必须被 lower。
+此时一个合理的方案是调用 <code>let _ = self.lower_node_id(node_id);</code>。</li>
+<li>如果要创建在 <code>AST</code> 中不存在的新节点，则<em>必须</em>通过调用 <code>next_id</code> 方法为它们创建新的 ID。
+该方法会生成一个新的 <code>NodeId</code> 并自动为您 lowering 它，以便您获得 <code>HirId</code>。</li>
+</ol>
+<p>如果您要创建新的 <code>DefId</code> ，由于每个 <code>DefId</code> 需要具有一个对应的 <code>NodeId</code>，建议将这些 <code>NodeId</code> 添加到 <code>AST</code> 中，这样您就不必在lowering时生成新的<code>DefId</code>。
+这样做的好处是创建了一种通过 <code>NodeId</code> 查找某物的 <code>DefID</code> 的方法。
+如果 lower 操作需要在多个位置使用该 <code>DefId</code>，则不能在所有这些位置生成一个新的 <code>NodeId</code>，因为那样的话，您将获得多余的的 <code>DefId</code>。
+而对于来自AST的<code>NodeId</code>来说，这些就都不是问题了。</p>
+<p>有一个 <code>NodeId</code> 也使得 <code>DefCollector</code> 可以生成 <code>DefId</code>，而不需要立即进行操作。
+将 <code>DefId</code> 的生成集中在一个地方可以使重构和理解变得更加容易。</p>
 <h1><a class="header" href="#debugging" id="debugging">Debugging</a></h1>
 <h1><a class="header" href="#the-mir-mid-level-ir" id="the-mir-mid-level-ir">The MIR (Mid-level IR)</a></h1>
-<h1><a class="header" href="#thir-and-mir-construction" id="thir-and-mir-construction">THIR and MIR construction</a></h1>
+<h1><a class="header" href="#mir-的构建" id="mir-的构建">MIR 的构建</a></h1>
+<p>从 <a href="mir/../hir.html">HIR</a> lower到 <a href="mir/./index.html">MIR</a> 的过程会在下面（可能不完整）这些item上进行：</p>
+<ul>
+<li>函数体和闭包体</li>
+<li><code>static</code> 和 <code>const</code> 的初始化</li>
+<li>枚举 discriminant 的初始化</li>
+<li>任何类型的胶水和补充代码
+<ul>
+<li>Tuple 结构体的初始化函数</li>
+<li>Drop 代码 （即没有手动调用的 <code>Drop::drop</code> 函数的对象的 <code>drop</code>）</li>
+<li>没有显式实现 <code>Drop</code> 的对象的 <code>drop</code></li>
+</ul>
+</li>
+</ul>
+<p>Lowering 是通过调用 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir_build/build/fn.mir_built.html"><code>mir_built</code></a> 查询触发的。
+MIR 构建器实际上并不使用 HIR，而是对 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir_build/thir/index.html">THIR</a> 中的表达式进行递归处理。</p>
+<p>Lowering会为函数签名中指定的每个参数创建局部变量。
+接下来，它为指定的每个绑定创建局部变量（例如， <code>(a, b): (i32, String)</code>）产生3个绑定，一个用于参数，两个用于绑定。
+接下来，它生成字段访问，该访问从参数读取字段并将其值写入绑定变量。</p>
+<p>在解决了初始化之后，lowering为函数体递归生成 MIR（ <code>Block</code> 表达式）并将结果写入 <code>RETURN_PLACE</code>。</p>
+<h2><a class="header" href="#unpack-所有东西" id="unpack-所有东西"><code>unpack!</code> 所有东西</a></h2>
+<p>生成 MIR 的函数有两种模式。
+第一种情况，如果该函数仅生成语句，则它将以基本块作为参数，这些语句应放入该基本块。
+然后可以正常返回结果：</p>
+<pre><code class="language-rust ignore">fn generate_some_mir(&amp;mut self, block: BasicBlock) -&gt; ResultType {
+   ...
+}
+</code></pre>
+<p>但是还有其他一些函数会生成新的基本块。
+例如，lowering 像 <code>if foo { 22 } else { 44 }</code> 这样的表达式需要生成一个小的“菱形图”。
+在这种情况下，函数将在其代码开始处使用一个基本块，并在代码生成结束时返回一个（可能是）新的基本块。
+<code>BlockAnd</code> 类型用于表示此类情况：</p>
+<pre><code class="language-rust ignore">fn generate_more_mir(&amp;mut self, block: BasicBlock) -&gt; BlockAnd&lt;ResultType&gt; {
+    ...
+}
+</code></pre>
+<p>当您调用这些函数时，通常有一个局部变量 <code>block</code>，它实际上是一个“光标”。 它代表了我们要添加新的MIR的位置。
+当调用 <code>generate_more_mir</code> 时，您会想要更新该光标。
+您可以手动执行此操作，但这很繁琐：</p>
+<pre><code class="language-rust ignore">let mut block;
+let v = match self.generate_more_mir(..) {
+    BlockAnd { block: new_block, value: v } =&gt; {
+        block = new_block;
+        v
+    }
+};
+</code></pre>
+<p>因此，我们提供了一个宏，可让您通过如下方式完成更新：
+<code>let v = unpack!(block = self.generate_more_mir(...))</code>。
+它简单地提取新的块并覆盖在 <code>unpack!</code> 中指明的变量 <code>block</code>。</p>
+<h2><a class="header" href="#将表达式-lowering-到-mir" id="将表达式-lowering-到-mir">将表达式 Lowering 到 MIR</a></h2>
+<p>本质上一个表达式可以有四种表示形式：</p>
+<ul>
+<li><code>Place</code> 指一个（或一部分）已经存在的内存地址（本地，静态，或者提升过的）</li>
+<li><code>Rvalue</code> 是可以给一个 <code>Place</code> 赋值的东西</li>
+<li><code>Operand</code> 是一个给像 <code>+</code> 这样的运算符或者一个函数调用的参数</li>
+<li>一个存放了一个值的拷贝的临时变量</li>
+</ul>
+<p>下图简要描绘了这些表示形式之间的交互：</p>
+<img src="https://raw.githubusercontent.com/rust-lang/rustc-dev-guide/master/src/mir/mir_overview.svg">
+<p><a href="https://raw.githubusercontent.com/rust-lang/rustc-dev-guide/9a676ee3a4bc9d8d054efd1ff57fc15ce19c00bd/src/mir/mir_detailed.svg">点此看更为详细的交互图</a></p>
+<p>我们首先将函数体 lowering 到一个 <code>Rvalue</code>，这样我们就可以为 <code>RETURN_PLACE</code> 创建一个赋值，
+这个 <code>Rvalue</code> 的 lowering 反过来会触发其参数的 <code>Operand</code> lowering（如果有的话）
+lowering <code>Operand</code> 会产生一个 <code>const</code> 操作数，或者移动/复制出 <code>Place</code>，从而触发 <code>Place</code> lowering。
+如果 lowering 的表达式包含操作，则 lowering 到 <code>Place</code> 的表达式可以触发创建一个临时变量。
+这是蛇咬自己的尾巴的地方，我们需要触发 <code>Rvalue</code> lowering，以将表达式的值写入本地变量。</p>
+<h2><a class="header" href="#operator-lowering" id="operator-lowering">Operator lowering</a></h2>
+<p>内置类型的运算符不会 lower 为函数调用（这将导致无限递归调用，因为这些 trait 实现包含了操作本身）。
+相反，对于这些类型已经存在了用于二元和一元运算符和索引运算的 <code>Rvalue</code>。
+这些 <code>Rvalue</code> 稍后将生成为 llvm 基本操作或 llvm 内部函数。</p>
+<p>所有其他类型的运算符都被 lower 为对运算符对应 trait 的实现中的的函数调用。</p>
+<p>无论采用哪种 lower 方式，运算符的参数都会 lower 为<code>Operand</code>。
+这意味着所有参数都是常量或者引用局部或静态位置中已经存在的值。</p>
+<h2><a class="header" href="#方法调用的-lowering" id="方法调用的-lowering">方法调用的 lowering</a></h2>
+<p>方法调用被降低到与一般函数调用相同的<code>TerminatorKind</code>。
+在<a href="mir/./index.html">MIR</a>中，方法调用和一般函数调用之间不再存在差异。</p>
+<h2><a class="header" href="#条件" id="条件">条件</a></h2>
+<p>不带字段变量的 <code>enum</code> 的 <code>if</code> 条件判断和 <code>match</code> 语句都会被lower为 <code>TerminatorKind::SwitchInt</code>。
+每个可能的值（如果为 <code>if</code> 条件判断，则对应的值为 <code>0</code> 和 <code>1</code>）都有一个对应的 <code>BasicBlock</code>。
+分支的参数是表示if条件值的 <code>Operand</code>。</p>
+<h3><a class="header" href="#模式匹配" id="模式匹配">模式匹配</a></h3>
+<p>具有字段的 <code>enum</code> 上的 <code>match</code> 语句也被 lower 为 <code>TerminatorKind::SwitchInt</code>，但是其 <code>Operand</code> 是一个 <code>Place</code>，可以在其中找到该值的判别式。
+这通常涉及将判别式读取为新的临时变量。</p>
+<h2><a class="header" href="#聚合构造" id="聚合构造">聚合构造</a></h2>
+<p>任何类型的聚合值（例如结构或元组）都是通过 <code>Rvalue::Aggregate</code> 建立的。
+所有字段都 lower 为 <code>Operator</code>。
+从本质上讲，这等效于对每个聚合上的字段都会有一个赋值语句，如果必要的话还会再加上一个对 <code>enum</code> 的判别式的赋值。</p>
 <h1><a class="header" href="#mir-visitor-and-traversal" id="mir-visitor-and-traversal">MIR visitor and traversal</a></h1>
 <h1><a class="header" href="#mir-passes-getting-the-mir-for-a-function" id="mir-passes-getting-the-mir-for-a-function">MIR passes: getting the MIR for a function</a></h1>
 <h1><a class="header" href="#identifiers-in-the-compiler" id="identifiers-in-the-compiler">Identifiers in the Compiler</a></h1>
@@ -1900,7 +2716,19 @@ fn main() {
 <h1><a class="header" href="#lowering-to-logic" id="lowering-to-logic">Lowering to logic</a></h1>
 <h1><a class="header" href="#goals-and-clauses" id="goals-and-clauses">Goals and clauses</a></h1>
 <h1><a class="header" href="#canonical-queries" id="canonical-queries">Canonical queries</a></h1>
-<h1><a class="header" href="#type-checking" id="type-checking">Type checking</a></h1>
+<h1><a class="header" href="#类型检查" id="类型检查">类型检查</a></h1>
+<p><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/index.html"><code>rustc_typeck</code></a> crate 包含&quot;类型收集&quot;和&quot;类型检查&quot;的源代码，和其它一些相关功能。(它很大程度依赖于<a href="./type-inference.html">type inference</a>和<a href="./traits/resolution.html">trait solving</a>。)</p>
+<h2><a class="header" href="#类型收集" id="类型收集">类型收集</a></h2>
+<p>类型&quot;收集&quot;是将用户写入的语法内容 HIR(<code>hir::Ty</code>) 中的类型转化为编译器使用的<strong>内部表示</strong>(<code>Ty&lt;'tcx&gt;</code>)的过程 – 对 where 子句和函数签名的其他位也进行类似的转换。</p>
+<p>为了尝试并感受到这种差异，请考虑下面的函数:</p>
+<pre><code class="language-rust ignore">struct Foo { }
+fn foo(x: Foo, y: self::Foo) { ... }
+//        ^^^     ^^^^^^^^^
+</code></pre>
+<p>这两个参数 <code>x</code> 和 <code>y</code> 有相同的类型: 但他们是不懂的 <code>hir::Ty</code> 节点。这些节点有不同的 span，当然它们的编码路径也有所不同。但它们一旦&quot;被收集&quot;到 <code>Ty&lt;'tcx&gt;</code> 节点，它们会使用完全相同的内部类型。</p>
+<p>集合被定义为计算关于正在编译的 crate 中的各种函数、特性和其他项的信息的一组<a href="./query.html">查询</a>。请注意，每个查询都与<em>过程间</em>事物有关——例如，对于函数定义，集合将计算出函数的类型和签名，但它不会以任何方式访问<em>函数体</em>，也不会检查局部变量的类型注释(这是类型<em>检查</em>的工作)。</p>
+<p>更多有关详细信息，请参阅 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_typeck/collect/"><code>collect</code></a> 模块。</p>
+<p><strong>TODO</strong>: 实际上谈到类型检查...</p>
 <h1><a class="header" href="#method-lookup" id="method-lookup">Method Lookup</a></h1>
 <h1><a class="header" href="#variance" id="variance">Variance</a></h1>
 <h1><a class="header" href="#opaque-types" id="opaque-types">Opaque Types</a></h1>
@@ -1923,6 +2751,41 @@ fn main() {
 <h1><a class="header" href="#creating-errors-with-sessiondiagnostic" id="creating-errors-with-sessiondiagnostic">Creating Errors With SessionDiagnostic</a></h1>
 <h1><a class="header" href="#lintstore" id="lintstore">LintStore</a></h1>
 <h1><a class="header" href="#diagnostic-codes" id="diagnostic-codes">Diagnostic Codes</a></h1>
+<h1><a class="header" href="#mir优化" id="mir优化">MIR优化</a></h1>
+<p>MIR优化是指在代码生成之前，为了产生更好的MIR指令而执行的优化。
+这些优化十分重要，体现在两个方面：
+首先，它使得最终生成的可执行代码的质量更好；其次，这意味着LLVM需要的工作量更少，编译速度更快。
+请注意，由于MIR是通用的（不是[monomorphized] <a href="https://rustc-dev-guide.rust-lang.org/appendix/glossary.html#mono">monomorph</a>）所以这些优化特别有效，我们可以优化通用代码，使得所有代码的特化版本同样受益！ </p>
+<p>MIR的优化执行在借用检查之后。通过执行一系列的pass不断优化MIR。
+一些pass需要执行在全量的代码上，一些pass则不执行实际的优化操作只进行代码检查，还有些pass只在<code>release</code>模式下适用。</p>
+<p>调用<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/fn.optimized_mir.html"><code>optimized_mir</code></a> 来 <a href="mir/../query.html">查询</a>为给定的<a href="https://rustc-dev-guide.rust-lang.org/appendix/glossary.html#def-id"><code>DefId</code></a>生成优化的MIR，该查询确保借用检查器已运行并且已经进行了一些校验。
+然后，<a href="https://rustc-dev-guide.rust-lang.org/mir/passes.html?highlight=steal#stealing">窃取</a>MIR，执行优化后，返回被优化后的MIR。 </p>
+<h2><a class="header" href="#定义优化passes" id="定义优化passes">定义优化Passes</a></h2>
+<p>优化pass的声明和执行顺序由<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/fn.run_optimization_passes.html"><code>run_optimization_passes</code></a>函数定义。
+它包含了一组待执行的pass，其中的每个pass都是一个实现了<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/trait.MirPass.html"><code>MirPass</code></a> trait的结构体。通过一个元素类型为<code>&amp;dyn MirPass</code>的数组实现。
+这些pass通常在<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/index.html"><code>rustc_mir::transform</code></a>模块下完成自己的实现。</p>
+<p>下面有一些pass的示例：</p>
+<ul>
+<li><code>CleanupNonCodegenStatements</code>: 清理那些只用于分析而不用于代码生成的信息；</li>
+<li><code>ConstProp</code>: <a href="https://en.wikipedia.org/wiki/Constant_folding#Constant_propagation">常量传播</a>。</li>
+</ul>
+<p>您可以查看<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/trait.MirPass.html#implementors">关于<code>MirPass</code>实现的相关章节</a>中的更多示例。</p>
+<h2><a class="header" href="#mir优化-levels" id="mir优化-levels">MIR优化 levels</a></h2>
+<p>MIR优化有不同程度的行为。
+实验性的优化可能会导致错误编译或增加编译时间。
+这样的pass包含在<code>nightly</code>版本中，以收集反馈并修改。要启用这些缓慢的或实验性的优化，可以指定<code>-Z mir-opt-level</code>调试标志。
+您可以在<a href="https://github.com/rust-lang/compiler-team/issues/319">compiler MCP</a>中找到这些级别的定义。
+如果您正在开发MIR优化pass，并且想查询您的优化是否应该运行，可以使用<code>tcx.sess.opts.debugging_opts.mir_opt_level</code>检查输入的级别。 </p>
+<h2><a class="header" href="#优化参数fuel" id="优化参数fuel">优化参数<code>fuel</code></a></h2>
+<p><code>fuel</code>是一个编译器选项 (<code>-Z fuel=&lt;crate&gt;=&lt;value&gt;</code>)，可以精细地控制在编译过程中的优化情况：每次优化将<code>fuel</code>减少1，当<code>fuel</code>达到0时不再进行任何优化。
+<code>fuel</code>的主要用途是调试那些可能不正确或使用不当的优化。通过更改选项，您可以通过二分法定位到发生错误的优化。 </p>
+<p>一般来讲，MIR优化执行过程中会通过调用<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty/context/struct.TyCtxt.html#method.consider_optimizing"><code>tcx.consider_optimizing</code></a>来检查<code>fuel</code>，如果<code>fuel</code>为空则跳过优化。
+有如下注意事项：</p>
+<ol>
+<li>如果认为一个优化行为是有保证的（即，为了结果的正确性每次编译都要执行），那么<code>fuel</code>是可以跳过的，比如<code>PromoteTemps</code>。</li>
+<li>在某些情况下，需要执行一个初始pass来收集候选，然后对他们迭代执行以达到优化的目的。在这种情况下，我们应该让初始pass对<code>fuel</code>的值尽可能地突变。
+这可以获得最佳的调试体验，因为可以确定候选列表中的某个优化pass可能未正确调用。 例如<code>InstCombine</code>和<code>ConstantPropagation</code>。 </li>
+</ol>
 <h1><a class="header" href="#debugging-1" id="debugging-1">Debugging</a></h1>
 <h1><a class="header" href="#constant-evaluation" id="constant-evaluation">Constant evaluation</a></h1>
 <h1><a class="header" href="#miri-const-evaluator" id="miri-const-evaluator">miri const evaluator</a></h1>
