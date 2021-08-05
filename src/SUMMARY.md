@@ -1,6 +1,6 @@
 # Summary
 
-- [中文版介绍](./README.md)
+- [介绍](./README.md)
 - [关于](./about.md)
 - [Getting Start](./getting_start.md)
 
