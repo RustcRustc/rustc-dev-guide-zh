@@ -2600,7 +2600,27 @@ lowering <code>Operand</code> 会产生一个 <code>const</code> 操作数，或
 <p>任何类型的聚合值（例如结构或元组）都是通过 <code>Rvalue::Aggregate</code> 建立的。
 所有字段都 lower 为 <code>Operator</code>。
 从本质上讲，这等效于对每个聚合上的字段都会有一个赋值语句，如果必要的话还会再加上一个对 <code>enum</code> 的判别式的赋值。</p>
-<h1><a class="header" href="#mir-visitor-and-traversal" id="mir-visitor-and-traversal">MIR visitor and traversal</a></h1>
+<h1><a class="header" href="#mir-visitor" id="mir-visitor">MIR visitor</a></h1>
+<p>MIR visitor 是遍历 MIR 并查找事物或对其进行更改的便捷工具。Visitor trait 是在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/mir/visit/index.html">the <code>rustc_middle::mir::visit</code> module</a> 中定义的-其中有两个是通过单个宏生成的：<code>Visitor</code>（工作于 <code>&amp;Mir</code> 之上，返回共享引用）和 <code>MutVisitor</code>（工作于 <code>&amp;mut Mir</code>之上，并返回可变引用）。</p>
+<p>要实现 Visitor，您必须创建一个代表您的 Visitor 的类型。
+通常，此类型希望在处理 MIR 时“挂”到您需要的任何状态上：</p>
+<pre><code class="language-rust ignore">struct MyVisitor&lt;...&gt; {
+    tcx: TyCtxt&lt;'tcx&gt;,
+    ...
+}
+</code></pre>
+<p>然后为该类型实现 <code>Visitor</code> 或 <code>MutVisitor</code>：</p>
+<pre><code class="language-rust ignore">impl&lt;'tcx&gt; MutVisitor&lt;'tcx&gt; for NoLandingPads {
+    fn visit_foo(&amp;mut self, ...) {
+        ...
+        self.super_foo(...);
+    }
+}
+</code></pre>
+<p>如上所示，在实现过程中，您可以覆盖任何 <code>visit_foo</code> 方法（例如，<code>visit_terminator</code>），以便编写一些代码，这些代码将在遇到<code>foo</code> 时执行。如果要递归遍历foo的内容，则可以调用 <code>super_foo</code> 方法。 （注意：您永远都不应该覆盖 <code>super_foo</code>）</p>
+<p>一个非常简单的 Visitor 示例可以在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/no_landing_pads/struct.NoLandingPads.html"><code>NoLandingPads</code></a> 中找到。该 Visitor 甚至不需要任何状态：它仅访问所有终止符并删除其“展开”的后继者。</p>
+<h2><a class="header" href="#遍历" id="遍历">遍历</a></h2>
+<p>除了 Visitor 之外，<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/mir/traversal/index.html"><code>rustc_middle::mir::traversal</code> 模块</a> 也包含一些有用的函数，用于以<a href="https://en.wikipedia.org/wiki/Tree_traversal">不同的标准顺序</a>（例如，前序，反向后序，依此类推）遍历 MIR CFG。</p>
 <h1><a class="header" href="#mir-passes-getting-the-mir-for-a-function" id="mir-passes-getting-the-mir-for-a-function">MIR passes: getting the MIR for a function</a></h1>
 <h1><a class="header" href="#identifiers-in-the-compiler" id="identifiers-in-the-compiler">Identifiers in the Compiler</a></h1>
 <h1><a class="header" href="#rustc中的闭包扩展" id="rustc中的闭包扩展">rustc中的闭包扩展</a></h1>
@@ -2733,7 +2753,128 @@ fn foo(x: Foo, y: self::Foo) { ... }
 <h1><a class="header" href="#variance" id="variance">Variance</a></h1>
 <h1><a class="header" href="#opaque-types" id="opaque-types">Opaque Types</a></h1>
 <h1><a class="header" href="#pattern-and-exhaustiveness-checking" id="pattern-and-exhaustiveness-checking">Pattern and Exhaustiveness Checking</a></h1>
-<h1><a class="header" href="#mir-dataflow" id="mir-dataflow">MIR dataflow</a></h1>
+<h1><a class="header" href="#数据流分析" id="数据流分析">数据流分析</a></h1>
+<!-- toc -->
+<p>如果您在MIR上进行开发，将会频繁遇到各种<a href="https://en.wikipedia.org/wiki/Data-flow_analysis#Basic_principles">数据流分析</a>。
+<code>rustc</code>通过数据流发现未初始化变量，确定生成器<code>yield</code>中的存活变量，以及在控制流图指定位置计算借用<code>Place</code>。
+数据流分析在现代编译器中是一个基础概念，该主题的知识对潜在贡献者十分有帮助。</p>
+<p>注意，本文档不是对数据流分析的一般介绍。只用于对<code>rustc</code>中分析框架的描述。
+它假设读者熟悉一些核心思想和基本概念，比如转换函数(transfer function)，不动点(fixpoint)和格(lattice)。
+如果您不熟悉这些术语，或者想要快速复习，那么Anders Møller和Michael I. Schwartzbach撰写的<a href="https://cs.au.dk/%7Eamoeller/spa/"><em>静态程序分析</em></a>是一本很好的免费教材。
+对于您喜欢视听学习，法兰克福歌德大学已经在<a href="https://www.youtube.com/watch?v=NVBQSR_HdL0&amp;list=PL_sGR8T76Y58l3Gck3ZwIIHLWEmXrOLV_&amp;index=2">YouTube</a>上用英语发布了一系列简短的讲座，非常容易上手。 </p>
+<h2><a class="header" href="#定义一个数据流分析" id="定义一个数据流分析">定义一个数据流分析</a></h2>
+<p>数据流分析的接口被分解成三个trait。首先是<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/dataflow/trait.AnalysisDomain.html"><code>AnalysisDomain</code></a>，所有分析都必须实现它。
+除了定义数据流状态类型，该trait还定义了每个基本块入口处状态的初始值，以及向前分析或者向后分析的方向。
+数据流分析的域(domain)必须是一个有正确<code>join</code>操作符的<a href="https://en.wikipedia.org/wiki/Lattice_(order)">格</a> (严格来讲是连接语义)。
+更多内容可以参考<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/dataflow/lattice/index.html"><code>lattice</code></a>和<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/dataflow/lattice/trait.JoinSemiLattice.html"><code>JoinSemiLattice</code></a>的文档。</p>
+<p>您必须提供一个<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/dataflow/trait.Analysis.html"><code>Analysis</code></a>的直接实现或者是一个<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/dataflow/trait.GenKillAnalysis.html"><code>GenKillAnalysis</code></a>代理的实现。后者用于所谓的<a href="https://en.wikipedia.org/wiki/Data-flow_analysis#Bit_vector_problems">&quot;gen-kill&quot; problems</a>，该问题可以通过一类简单的转换函数解决。
+如果一个分析的域不是<code>BitSet</code>(位图)，或者转换函数无法使用“gen”、“kill”操作实现，那么必须直接实现<code>Analysis</code>，这样的实现可能会变慢。
+而所有的<code>GenKillAnalysis</code>将会通过默认的<code>impl</code>自动实现<code>Analysis</code>。</p>
+<pre><code class="language-text"> AnalysisDomain
+       ^
+       |          | = has as a supertrait
+       |          . = provides a default impl for
+       |
+   Analysis
+     ^   ^
+     |   .
+     |   .
+     |   .
+ GenKillAnalysis
+
+</code></pre>
+<h3><a class="header" href="#转换函数与作用函数" id="转换函数与作用函数">转换函数与作用函数</a></h3>
+<p><code>rustc</code>的数据流分析框架允许基本块内的每条语句(包括终结语句terminator)定义自己的转换函数。
+简便起见，这些独立的转换函数在下面被成为“作用函数”。
+每个作用函数都以数据流顺序依次执行，并且它们共同定义了整个基本块的传递函数。
+也可以为终结语句(terminator)的特定的传出边(译注：分支跳转的特定边)定义一个“作用函数”(例如<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/dataflow/trait.Analysis.html#tymethod.apply_call_return_effect"><code>apply_call_return_effect</code></a>作用于<code>Call</code>指令的后继边)，
+这些被称为“单边作用”(per-edge effects)。</p>
+<p><code>GenKillAnalysis</code>的方法与<code>Analysis</code>的方法之间唯一有意义的区别（除“apply”前缀之外）是<code>Analysis</code>对数据流状态可以直接修改，
+而<code>GenKillAnalysis</code>仅能看到<code>GenKill</code> trait的实现者，即只允许<code>gen</code>和<code>kill</code>操作可变。 </p>
+<h3><a class="header" href="#前序作用" id="前序作用">“前序”作用</a></h3>
+<p>细心的读者可能会注意到，每个语句实际上都有两种可能的作用函数，即“前序”作用(&quot;before&quot; effects)和“非前序”作用(主要作用，effects)。
+<strong>无论分析的方向如何</strong>，“前序”作用都会在主要作用函数之前应用。
+换句话说，后向分析将在计算基本块的传递函数时先应用“前序”作用函数，然后调用“主要”作用函数，就像正向分析一样。 </p>
+<p>大多数分析仅使用“主要”作用，如果每条语句具有多个作用函数，会使得调用者难以抉择。
+但是，“前序”作用在某些情况下很有用，例如当必须将赋值语句左右表达式分开考虑时。 </p>
+<h3><a class="header" href="#终止条件" id="终止条件">终止条件</a></h3>
+<p>您的分析必须能收敛到不动点，否则会一直执行下去。
+不动点的收敛是一种“达到平衡”的方式。为了达到平衡，您的分析必须满足某些定律。其中之一的定律是任意值与底值(bottom)结合等于该值，即满足如下等式：</p>
+<blockquote>
+<p><em>bottom</em> join <em>x</em> = <em>x</em></p>
+</blockquote>
+<p>另一条定律是您的分析需要有一个满足如下等式的顶值(top)：</p>
+<blockquote>
+<p><em>top</em> join <em>x</em> = <em>top</em></p>
+</blockquote>
+<p>顶值可以确保半格的高度是有限的，并且上述的定律保证了一旦数据流状态到达顶值，将不在发生变化。</p>
+<h2><a class="header" href="#例子" id="例子">例子</a></h2>
+<p>本节提供了一个简单的数据流分析。它没有解释您需要了解的所有内容，但希望它将使本页面的其余部分更加清晰。</p>
+<p>假设我们要做一个简单的分析，以确定程序中的某个点是否已经调用过<code>mem::transmute</code>。
+我们的分析域将是一个布尔变量，它表示到目前为止是否已调用了<code>transmute</code>。
+底值是<code>false</code>，因为初始情况下未调用<code>transmute</code>。
+顶值是<code>true</code>，因为一旦我们确定调用了<code>transmute</code>，分析就完成了。
+我们的join运算符是OR（||）运算符。使用OR而不是AND是由于存在以下场景： </p>
+<pre><code>let x = if some_cond {
+    std::mem::transmute&lt;i32, u32&gt;(0_i32); // transmute 被调用!
+} else {
+    1_u32; // transmute 未被调用
+};
+
+// 此处 transmute 被调用了吗? 保守结果认为是true
+println!(&quot;x: {}&quot;, x);
+</code></pre>
+<h2><a class="header" href="#检查结果" id="检查结果">检查结果</a></h2>
+<p>如果您实现了一个分析，您必须将它传给引擎<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/dataflow/struct.Engine.html"><code>Engine</code></a>。
+这个功能通过定义<code>Analysis</code>中的<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/dataflow/trait.Analysis.html#method.into_engine"><code>into_engine</code></a>函数，比<code>Engine::new_gen_kill</code>来构造效率更高。</p>
+<p>调用<code>Engin</code>中的<code>iterate_to_fixpoint</code>可以返回<code>Results</code>，该结构中包含每个基本块进入时不动点的数据流状态。
+当拥有一个<code>Results</code>结构，您可以在CFG的任意位置检查不动点的数据流状态。如果只需要少量位置的状态，可以使用<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/dataflow/struct.ResultsCursor.html"><code>ResultsCursor</code></a>。
+如果需要<strong>每个</strong>位置的状态，使用<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/dataflow/trait.ResultsVisitor.html"><code>ResultsVisitor</code></a>更加高效。</p>
+<pre><code class="language-text">                         Analysis
+                            |
+                            | into_engine(…)
+                            |
+                          Engine
+                            |
+                            | iterate_to_fixpoint()
+                            |
+                         Results
+                         /     \
+ into_results_cursor(…) /       \  visit_with(…)
+                       /         \
+               ResultsCursor  ResultsVisitor
+</code></pre>
+<p>下方是<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/dataflow/trait.ResultsVisitor.html"><code>ResultsVisitor</code></a>的示例代码：</p>
+<pre><code class="language-rust ignore">// Assuming `MyVisitor` implements `ResultsVisitor&lt;FlowState = MyAnalysis::Domain&gt;`...
+let mut my_visitor = MyVisitor::new();
+
+// inspect the fixpoint state for every location within every block in RPO.
+let results = MyAnalysis::new()
+    .into_engine(tcx, body, def_id)
+    .iterate_to_fixpoint()
+    .visit_in_rpo_with(body, &amp;mut my_visitor);
+</code></pre>
+<p><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/dataflow/struct.ResultsCursor.html"><code>ResultsCursor</code></a>示例代码：</p>
+<pre><code class="language-rust ignore">let mut results = MyAnalysis::new()
+    .into_engine(tcx, body, def_id)
+    .iterate_to_fixpoint()
+    .into_results_cursor(body);
+
+// Inspect the fixpoint state immediately before each `Drop` terminator.
+for (bb, block) in body.basic_blocks().iter_enumerated() {
+    if let TerminatorKind::Drop { .. } = block.terminator().kind {
+        results.seek_before_primary_effect(body.terminator_loc(bb));
+        let state = results.get();
+        println!(&quot;state before drop: {:#?}&quot;, state);
+    }
+}
+</code></pre>
+<h3><a class="header" href="#graphviz图" id="graphviz图">Graphviz图</a></h3>
+<p>当需要调试数据流分析结果的时候，可以使用可视化工具。通过<a href="mir/./debugging.html">MIR调试命令</a>中的<code>-Z dump-mir</code>来完成。
+以<code>-Z dump-mir=F -Z dump-mir-dataflow</code>开头，其中<code>F</code>是&quot;all&quot;或是您感兴趣的MIR函数的名称。</p>
+<p>这些<code>.dot</code>文件将保存在您的<code>mir_dump</code>目录中，并将分析的<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/dataflow/trait.AnalysisDomain.html#associatedconstant.NAME"><code>NAME</code></a> (例如，<code>maybe_inits</code>)作为其文件名的一部分。
+每个可视化文件将在每个基本块的入口和出口显示完整的数据流状态，以及每个语句和终止语句中发生的任何更改。请参见下面的示例： </p>
+<p><img src="mir/../img/dataflow-graphviz-example.png" alt="A graphviz diagram for a dataflow analysis" /></p>
 <h1><a class="header" href="#the-borrow-checker" id="the-borrow-checker">The borrow checker</a></h1>
 <h1><a class="header" href="#tracking-moves-and-initialization" id="tracking-moves-and-initialization">Tracking moves and initialization</a></h1>
 <h1><a class="header" href="#move-paths" id="move-paths">Move paths</a></h1>
@@ -2790,8 +2931,45 @@ fn foo(x: Foo, y: self::Foo) { ... }
 <h1><a class="header" href="#constant-evaluation" id="constant-evaluation">Constant evaluation</a></h1>
 <h1><a class="header" href="#miri-const-evaluator" id="miri-const-evaluator">miri const evaluator</a></h1>
 <h1><a class="header" href="#monomorphization" id="monomorphization">Monomorphization</a></h1>
-<h1><a class="header" href="#lowering-mir" id="lowering-mir">Lowering MIR</a></h1>
-<h1><a class="header" href="#code-generation" id="code-generation">Code Generation</a></h1>
+<h1><a class="header" href="#降级-mir-到-codegen-ir" id="降级-mir-到-codegen-ir">降级 MIR 到 Codegen IR</a></h1>
+<p>现在我们有了一个要从收集器生成的符号列表，我们需要生成某种类型的代码 codegen IR。在本章中，我们将假设是 LLVM IR，因为这是 rustc 常用的。实际的单态化是在我们翻译的过程中进行的。</p>
+<p>回想一下，后端是由 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/base/fn.codegen_crate.html"><code>rustc_codegen_ssa::base::codegen_crate</code></a> 开始的。最终到达 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/fn.codegen_mir.html"><code>rustc_codegen_ssa::mir::codegen_mir</code></a>，从 MIR 降级到 LLVM IR。</p>
+<p>该代码被分成处理特定 MIR 原语的模块:</p>
+<ul>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/block/index.html"><code>rustc_codegen_ssa::mir::block</code></a> 将处理翻译块及其终结符。这个模块做的最复杂也是最有趣的事情是为函数调用生成代码，包括必要的展开处理 IR。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/statement/index.html"><code>rustc_codegen_ssa::mir::statement</code></a> 翻译 MIR 语句。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/operand/index.html"><code>rustc_codegen_ssa::mir::operand</code></a> 翻译 MIR 操作。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/place/index.html"><code>rustc_codegen_ssa::mir::place</code></a> 翻译 MIR 位置参考。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/rvalue/index.html"><code>rustc_codegen_ssa::mir::rvalue</code></a> 翻译 MIR 右值。</li>
+</ul>
+<p>在转换一个函数之前，将运行一些简单的和基本的分析步骤以帮助我们生成更简单、更有效的 LLVM IR。这种分析方法的一个例子是找出哪些变量类似于 SSA，这样我们就可以直接将它们转换为 SSA，而不必依赖 LLVM 的 <code>mem2reg</code> 来处理这些变量。分析可以在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/analyze/index.html"><code>rustc_codegen_ssa::mir::analyze</code></a> 中找到。</p>
+<p>通常一个 MIR 基本块会映射到一个 LLVM 基本块，除了极少数的例外: 内部调用或函数调用以及较少的基本的像 <code>assert</code> 这样 MIR 语句可能会产生多个基本块。这是对代码生成中不可移植的 LLVM 特定部分的完美诠释。内部生成是相当容易理解的，因为它涉及的抽象级别很低，可以在<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_llvm/intrinsic/index.html"><code>rustc_codegen_llvm::intrinsic</code></a> 中找到。</p>
+<p>其他的都将使用<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_llvm/builder/index.html">builder interface</a>，这是在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/index.html"><code>rustc_codegen_ssa::mir::*</code></a> 模块中调用的代码。</p>
+<blockquote>
+<p>TODO: 讨论常量是如何生成的</p>
+</blockquote>
+<h1><a class="header" href="#代码生成" id="代码生成">代码生成</a></h1>
+<p>代码生成或&quot;codegen&quot;是编译器生成可执行二进制文件的一部分。通常，rustc 使用 LLVM 来生成代码; 它也支持 <a href="https://github.com/bytecodealliance/wasmtime/tree/HEAD/cranelift">Cranelift</a>。关键是 rustc 本身并不实现 codegen。但是值得注意的是，在 rust 源代码中，后端的许多部分在名称中都有 <code>codegen</code> (没有严格的界限)。</p>
+<blockquote>
+<p>注意: 如果您正在寻找关于如何调试代码生成错误的提示，请参阅<a href="backend/./debugging.html">调试章节的这一部分</a>。</p>
+</blockquote>
+<h2><a class="header" href="#llvm-是什么" id="llvm-是什么">LLVM 是什么?</a></h2>
+<p><a href="https://llvm.org">LLVM</a> 是“模块化和可重用的编译器和工具链技术的集合”。特别是，LLVM 项目包含一个可插拔的编译器后端(也称为&quot;LLVM&quot;) ，许多编译器项目都使用它，包括 <code>clang</code> C 编译器和我们心爱的 <code>rustc</code>。</p>
+<p>LLVM 接受 LLVM IR 的形式输入。它基本上是带有附加的低级类型和注释的汇编代码。这些注释有助于对 LLVM IR 和输出的机器代码进行优化。所有这一切的最终结果是(最终)一些可执行的东西(例如一个 ELF 对象、一个 EXE 或者一个 wasm)。</p>
+<p>使用 LLVM 有几个好处:</p>
+<ul>
+<li>不需要编写一个完整的编译器后端，减少了实现和维护的负担。</li>
+<li>从 LLVM 项目收集的大量高级优化套件中受益。</li>
+<li>可以自动将 Rust 编译到 LLVM 支持的任何平台上。例如，一旦 LLVM 添加了对 wasm 的支持，瞧！Rustc，clang，和一堆其他语言都能编译成 wasm！(嗯，还有一些额外的工作要做，但我们已经完成了90%)。</li>
+<li>我们和其他编译器项目互相受益. 例如, 当<a href="https://meltdownattack.com/">Spectre 和 Meltdown 安全漏洞</a>被发现，只需要修补 LLVM。</li>
+</ul>
+<h2><a class="header" href="#运行-llvm-链接和元数据生成" id="运行-llvm-链接和元数据生成">运行 LLVM, 链接和元数据生成</a></h2>
+<p>一旦建立了所有函数和静态等的 LLVM IR，就可以开始运行 LLVM 并进行优化。LLVM IR 分为“模块”。可以同时编写多个“模块”，以帮助实现多核使用。这些“模块”就是我们所说的 <em>codegen
+units</em>。这些单元是在单态化收集阶段建立起来的。</p>
+<p>一旦 LLVM 从这些模块生成对象，这些对象就会被传递给链接器，还可以选择生成元数据对象和归档文件或可执行文件。</p>
+<p>运行优化的不一定是上面描述的代码原阶段。对于某些类型的 LTO，优化可能发生在链路时间。在将对象传递到链接器之前还可能进行一些优化，而在链接过程中也可能进行一些优化。</p>
+<p>这些都发生在编译的最后阶段。代码可以在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/back/index.html"><code>rustc_codegen_ssa::back</code></a> 和 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_llvm/back/index.html"><code>rustc_codegen_llvm::back</code></a> 中找到。遗憾的是，这段代码与 LLVM 相关的代码并没有很好地分离; <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/index.html"><code>rustc_codegen_ssa</code></a> 包含了大量特定于 LLVM 后端的代码。</p>
+<p>一旦这些组件完成了它们的工作，您的文件系统中就会出现许多与您所请求的输出相对应的文件。</p>
 <h1><a class="header" href="#updating-llvm" id="updating-llvm">Updating LLVM</a></h1>
 <h1><a class="header" href="#debugging-llvm" id="debugging-llvm">Debugging LLVM</a></h1>
 <h1><a class="header" href="#backend-agnostic-codegen" id="backend-agnostic-codegen">Backend Agnostic Codegen</a></h1>
@@ -2801,6 +2979,97 @@ fn foo(x: Foo, y: self::Foo) { ... }
 <h1><a class="header" href="#sanitizers-support" id="sanitizers-support">Sanitizers Support</a></h1>
 <h1><a class="header" href="#debugging-support-in-the-rust-compiler" id="debugging-support-in-the-rust-compiler">Debugging Support in the Rust Compiler</a></h1>
 <h1><a class="header" href="#附录-b-glossary" id="附录-b-glossary">附录 B: Glossary</a></h1>
+<h1><a class="header" href="#glossary" id="glossary">Glossary</a></h1>
+<!-- &nbsp;s are a workaround for https://github.com/badboy/mdbook-toc/issues/19 -->
+<table><thead><tr><th>术语</th><th>中文</th><th>意义</th></tr></thead><tbody>
+<tr><td><span id="arena">arena/arena allocation</span>  </td><td><span id="arena">竞技场分配</span>  </td><td>arena 是一个大内存缓冲区，从中可以进行其他内存分配，这种分配方式称为竞技场分配。</td></tr>
+<tr><td><span id="ast">AST</span>                       </td><td><span id="ast">抽象语法树</span></td><td>由<code>rustc_ast</code> crate 产生的抽象语法树。</td></tr>
+<tr><td><span id="binder">binder</span>                 </td><td><span id="binder">绑定器</span></td><td>绑定器是声明变量和类型的地方。例如，<code>&lt;T&gt;</code> 是<code>fn foo&lt;T&gt;(..)</code>中泛型类型参数 <code>T</code>的绑定器，以及 |<code>a</code>|<code> ...</code>  是 参数<code>a</code>的绑定器。</td></tr>
+<tr><td><span id="body-id">BodyId</span>                </td><td><span id="body-id"> 主体ID</span></td><td>一个标识符，指的是crate 中的一个特定主体（函数或常量的定义）。</td></tr>
+<tr><td><span id="bound-var">bound variable</span>      </td><td><span id="bound-var">绑定变量</span>      </td><td>&quot;绑定变量 &quot;是在表达式/术语中声明的变量。例如，变量<code>a</code>被绑定在闭包表达式中|<code>a</code>|<code> a * 2</code>。</td></tr>
+<tr><td><span id="codegen">codegen</span>               </td><td><span id="codegen">代码生成</span>               </td><td>由 MIR 转译为 LLVM IR。</td></tr>
+<tr><td><span id="codegen-unit">codegen unit</span>     </td><td><span id="codegen-unit">代码生成单元</span>     </td><td>当生成LLVM IR时，编译器将Rust代码分成若干个代码生成单元（有时缩写为CGU）。这些单元中的每一个都是由LLVM独立处理的，实现了并行化。它们也是增量编译的单位。</td></tr>
+<tr><td><span id="completeness">completeness</span>     </td><td><span id="completeness">完整性</span>     </td><td>类型理论中的一个技术术语，它意味着每个类型安全的程序也会进行类型检查。同时拥有健全性（soundness）和完整性（completeness）是非常困难的，而且通常健全性（soundness）更重要。</td></tr>
+<tr><td><span id="cfg">control-flow graph</span>        </td><td><span id="cfg">控制流图</span>        </td><td>程序的控制流表示。</td></tr>
+<tr><td><span id="ctfe">CTFE</span>                     </td><td><span id="ctfe">编译时函数求值</span>                     </td><td>编译时函数求值（Compile-Time Function Evaluation）的简称，是指编译器在编译时计算 &quot;const fn &quot;的能力。这是编译器常量计算系统的一部分。</td></tr>
+<tr><td><span id="cx">cx</span>                         </td><td><span id="cx">上下文</span>                         </td><td>Rust 编译器内倾向于使用 &quot;cx &quot;作为上下文的缩写。另见 &quot;tcx&quot;、&quot;infcx &quot;等。</td></tr>
+<tr><td><span id="ctxt">ctxt</span>                     </td><td><span id="ctxt">上下文（另一个缩写）</span>                     </td><td>我们也使用 &quot;ctxt &quot;作为上下文的缩写，例如， <a href="appendix/glossary.html#TyCtxt"><code>TyCtxt</code></a>，以及 <a href="appendix/glossary.html#cx">cx</a> 或 <a href="appendix/glossary.html#tcx">tcx</a>。</td></tr>
+<tr><td><span id="dag">DAG</span>                       </td><td><span id="dag">有向无环图</span>                       </td><td>在编译过程中，一个有向无环图被用来跟踪查询之间的依赖关系</td></tr>
+<tr><td><span id="data-flow">data-flow analysis</span>  </td><td><span id="data-flow">数据流分析</span>  </td><td>静态分析，找出程序控制流中每一个点的属性。</td></tr>
+<tr><td><span id="debruijn">DeBruijn Index</span>       </td><td><span id="debruijn">德布鲁因索引</span>       </td><td>一种只用整数来描述一个变量被绑定的绑定器的技术。它的好处是，在变量重命名下，它是不变的。</td></tr>
+<tr><td><span id="def-id">DefId</span>                  </td><td><span id="def-id">定义Id</span>                  </td><td>一个识别定义的索引（见<code>rustc_middle/src/hir/def_id.rs</code>）。<code>DefPath</code>的唯一标识。</td></tr>
+<tr><td><span id="discriminant">discriminant</span>     </td><td><span id="discriminant">判别式</span>     </td><td>与枚举变体或生成器状态相关的基础值，以表明它是 &quot;激活的（avtive）&quot;（但不要与它的<a href="appendix/glossary.html#variant-idx">&quot;变体索引&quot;</a>混淆）。在运行时，激活变体的判别值被编码在<a href="appendix/glossary.html#tag">tag</a>中。</td></tr>
+<tr><td><span id="double-ptr">double pointer</span>     </td><td><span id="double-ptr">双指针</span>     </td><td>一个带有额外元数据的指针。同指「胖指针」。</td></tr>
+<tr><td><span id="drop-glue">drop glue</span>           </td><td><span id="drop-glue">drop胶水</span>           </td><td>(内部）编译器生成的指令，处理调用数据类型的析构器（<code>Drop</code>）。</td></tr>
+<tr><td><span id="dst">DST</span>                       </td><td><span id="dst">DST</span>                       </td><td>Dynamically-Sized Type的缩写，这是一种编译器无法静态知道内存大小的类型（例如：<code>str'或</code>[u8]<code>）。这种类型没有实现</code>Sized<code>，不能在栈中分配。它们只能作为结构中的最后一个字段出现。它们只能在指针后面使用（例如：</code>&amp;str<code>或</code>&amp;[u8]`）。</td></tr>
+<tr><td><span id="ebl">early-bound lifetime</span>      </td><td><span id="ebl">早绑定生存期</span>      </td><td>一个在其定义处被替换的生存期区域（region）。绑定在一个项目的<code>Generics'中，并使用</code>Substs'进行替换。与<strong>late-bound lifetime</strong>形成对比。</td></tr>
+<tr><td><span id="empty-type">empty type</span>         </td><td><span id="empty-type">空类型</span>         </td><td>参考 &quot;uninhabited type&quot;.</td></tr>
+<tr><td><span id="fat-ptr">fat pointer</span>           </td><td><span id="fat-ptr">胖指针</span>           </td><td>一个两字（word）的值，携带着一些值的地址，以及一些使用该值所需的进一步信息。Rust包括两种 &quot;胖指针&quot;：对切片（slice）的引用和特质（trait）对象。对切片的引用带有切片的起始地址和它的长度。特质对象携带一个值的地址和一个指向适合该值的特质实现的指针。&quot;胖指针 &quot;也被称为 &quot;宽指针&quot;，和 &quot;双指针&quot;。</td></tr>
+<tr><td><span id="free-var">free variable</span>        </td><td><span id="free-var">自由变量</span>        </td><td>自由变量 是指没有被绑定在表达式或术语中的变量；</td></tr>
+<tr><td><span id="generics">generics</span>             </td><td><span id="generics">泛型</span>             </td><td>通用类型参数集。</td></tr>
+<tr><td><span id="hir">HIR</span>                       </td><td><span id="hir">高级中间语言</span>                       </td><td>高级中间语言，通过对AST进行降级（lowering）和去糖（desugaring）而创建。</td></tr>
+<tr><td><span id="hir-id">HirId</span>                  </td><td><span id="hir-id">HirId</span>                  </td><td>通过结合“def-id”和 &quot;intra-definition offset&quot;来识别HIR中的一个特定节点。</td></tr>
+<tr><td><span id="hir-map">HIR map</span>               </td><td><span id="hir-map">HIR map</span>               </td><td>通过<code>tcx.hir()</code>访问的HIR Map，可以让你快速浏览HIR并在各种形式的标识符之间进行转换。</td></tr>
+<tr><td><span id="ice">ICE</span>                       </td><td><span id="ice">ICE</span>                       </td><td>内部编译器错误的简称，这是指编译器崩溃的情况。</td></tr>
+<tr><td><span id="ich">ICH</span>                       </td><td><span id="ich">ICH</span>                       </td><td>增量编译哈希值的简称，它们被用作HIR和crate metadata等的指纹，以检查是否有变化。这在增量编译中是很有用的，可以查看crate的一部分是否发生了变化，应该重新编译。</td></tr>
+<tr><td><span id="infcx">infcx</span>                   </td><td><span id="infcx">类型推导上下文</span>                   </td><td>类型推导上下文（<code>InferCtxt</code>）。</td></tr>
+<tr><td><span id="inf-var">inference variable</span>    </td><td><span id="inf-var">推导变量</span>    </td><td>在进行类型或区域推理时，&quot;推导变量 &quot;是一种特殊的类型/区域，代表你试图推理的内容。想想代数中的X。例如，如果我们试图推断一个程序中某个变量的类型，我们就创建一个推导变量来代表这个未知的类型。</td></tr>
+<tr><td><span id="intern">intern</span>                 </td><td><span id="intern">intern</span>                 </td><td>intern是指存储某些经常使用的常量数据，如字符串，然后用一个标识符（如`符号'）而不是数据本身来引用这些数据，以减少内存的使用和分配的次数。</td></tr>
+<tr><td><span id="intrinsic">intrinsic</span>           </td><td><span id="intrinsic">内部函数</span>           </td><td>内部函数是在编译器本身中实现的特殊功能，但向用户暴露（通常是不稳定的）。它们可以做神奇而危险的事情。</td></tr>
+<tr><td><span id="ir">IR</span>                         </td><td><span id="ir">IR</span>                         </td><td>Intermediate Representation的简称，是编译器中的一个通用术语。在编译过程中，代码被从原始源码（ASCII文本）转换为各种IR。在Rust中，这些主要是HIR、MIR和LLVM IR。每种IR都适合于某些计算集。例如，MIR非常适用于借用检查器，LLVM IR非常适用于codegen，因为LLVM接受它。</td></tr>
+<tr><td><span id="irlo">IRLO</span>                     </td><td><span id="irlo">IRLO</span>                     </td><td><code>IRLO</code>或<code>irlo</code>有时被用作<a href="https://internals.rust-lang.org">internals.rust-lang.org</a>的缩写。</td></tr>
+<tr><td><span id="item">item</span>                     </td><td><span id="item">语法项</span>                     </td><td>语言中的一种 &quot;定义&quot;，如静态、常量、使用语句、模块、结构等。具体来说，这对应于 &quot;item&quot;类型。</td></tr>
+<tr><td><span id="lang-item">lang item</span>           </td><td><span id="lang-item">语言项</span>           </td><td>代表语言本身固有的概念的项目，如特殊的内置特质，如<code>同步</code>和<code>发送</code>；或代表操作的特质，如<code>添加</code>；或由编译器调用的函数。</td></tr>
+<tr><td><span id="lbl">late-bound lifetime</span>       </td><td><span id="lbl">晚绑定生存期</span>       </td><td>一个在其调用位置被替换的生存期区域。绑定在HRTB中，由编译器中的特定函数替代，如<code>liberate_late_bound_regions</code>。与<strong>早绑定的生存期</strong>形成对比。</td></tr>
+<tr><td><span id="local-crate">local crate</span>       </td><td><span id="local-crate">本地crate</span>       </td><td>目前正在编译的crate。这与 &quot;上游crate&quot;相反，后者指的是本地crate的依赖关系。</td></tr>
+<tr><td><span id="lto"><a href="https://llvm.org/docs/LinkTimeOptimization.html">LTO</a></span>                       </td><td><span id="lto"><a href="https://llvm.org/docs/LinkTimeOptimization.html">LTO</a></span>                       </td><td>链接时优化（Link-Time Optimizations）的简称，这是LLVM提供的一套优化，在最终二进制文件被链接之前进行。这些优化包括删除最终程序中从未使用的函数，例如。_<a href="https://clang.llvm.org/docs/ThinLTO.html">ThinLTO</a>_是LTO的一个变种，旨在提高可扩展性和效率，但可能牺牲了一些优化。</td></tr>
+<tr><td><span id="llvm"><a href="https://llvm.org/">LLVM</a></span>                   </td><td><span id="llvm"><a href="https://llvm.org/">LLVM</a></span>                   </td><td>(实际上不是一个缩写 :P) 一个开源的编译器后端。它接受LLVM IR并输出本地二进制文件。然后，各种语言（例如Rust）可以实现一个编译器前端，输出LLVM IR，并使用LLVM编译到所有LLVM支持的平台。</td></tr>
+<tr><td><span id="memoization">memoization</span>       </td><td><span id="memoization">memoization</span>       </td><td>储存（纯）计算结果（如纯函数调用）的过程，以避免在未来重复计算。这通常是执行速度和内存使用之间的权衡。</td></tr>
+<tr><td><span id="mir">MIR</span>                       </td><td><span id="mir">中级中间语言</span>                       </td><td>在类型检查后创建的中级中间语言，供borrowck和codegen使用。</td></tr>
+<tr><td><span id="miri">miri</span>                     </td><td><span id="miri">mir解释器</span>                     </td><td>MIR的一个解释器，用于常量计算。</td></tr>
+<tr><td><span id="mono">monomorphization</span>         </td><td><span id="mono">单态化</span>         </td><td>采取类型和函数的通用实现并将其与具体类型实例化的过程。例如，在代码中可能有<code>Vec&lt;T&gt;</code>，但在最终的可执行文件中，将为程序中使用的每个具体类型有一个<code>Vec</code>代码的副本（例如，<code>Vec&lt;usize&gt;</code>的副本，<code>Vec&lt;MyStruct&gt;</code>的副本，等等）。</td></tr>
+<tr><td><span id="normalize">normalize</span>           </td><td><span id="normalize">归一化</span>           </td><td>转换为更标准的形式的一般术语，但在rustc的情况下，通常指的是关联类型归一化。</td></tr>
+<tr><td><span id="newtype">newtype</span>               </td><td><span id="newtype">newtype</span>               </td><td>对其他类型的封装（例如，<code>struct Foo(T)</code>是<code>T</code>的一个 &quot;新类型&quot;）。这在Rust中通常被用来为索引提供一个更强大的类型。</td></tr>
+<tr><td><span id="niche">niche</span>                   </td><td><span id="niche">利基</span>                   </td><td>一个类型的无效位模式<em>可用于</em>布局优化。有些类型不能有某些位模式。例如，&quot;非零*&quot;整数或引用&quot;&amp;T &quot;不能用0比特串表示。这意味着编译器可以通过利用无效的 &quot;利基值 &quot;来进行布局优化。这方面的一个应用实例是<a href="https://rust-lang.github.io/unsafe-code-guidelines/layout/enums.html#discriminant-elision-on-option-like-enums"><em>Discriminant elision on <code>Option</code>-like enums</em></a>，它允许使用一个类型的niche作为一个<code>enum</code>的<a href="appendix/glossary.html#tag">&quot;标签&quot;</a>，而不需要一个单独的字段。</td></tr>
+<tr><td><span id="nll">NLL</span>                       </td><td><span id="nll">NLL</span>                       </td><td>这是非词法作用域生存期的简称，它是对Rust的借用系统的扩展，使其基于控制流图。</td></tr>
+<tr><td><span id="node-id">node-id or NodeId</span>     </td><td><span id="node-id">node-id or NodeId</span>     </td><td>识别AST或HIR中特定节点的索引；逐渐被淘汰，被<code>HirId</code>取代。</td></tr>
+<tr><td><span id="obligation">obligation</span>         </td><td><span id="obligation">obligation</span>         </td><td>必须由特质系统证明的东西。</td></tr>
+<tr><td><span id="placeholder">placeholder</span>       </td><td><span id="placeholder">placeholder</span>       </td><td><strong>注意：skolemization被placeholder废弃</strong>一种处理围绕 &quot;for-all &quot;类型的子类型的方法（例如，<code>for&lt;'a&gt; fn(&amp;'a u32)</code>），以及解决更高等级的trait边界（例如，<code>for&lt;'a&gt; T: Trait&lt;'a&gt;</code>）。</td></tr>
+<tr><td><span id="point">point</span>                   </td><td><span id="point">point</span>                   </td><td>在NLL分析中用来指代MIR中的某个特定位置；通常用来指代控制流图中的一个节点。</td></tr>
+<tr><td><span id="polymorphize">polymorphize</span>     </td><td><span id="polymorphize">多态化</span>     </td><td>一种避免不必要的单态化的优化。</td></tr>
+<tr><td><span id="projection">projection</span>         </td><td><span id="projection">投影</span>         </td><td>一个 &quot;相对路径 &quot;的一般术语，例如，<code>x.f</code>是一个 &quot;字段投影&quot;，而<code>T::Item</code>是一个&quot;关联类型投影&quot;</td></tr>
+<tr><td><span id="pc">promoted constants</span>         </td><td><span id="pc">常量提升</span>         </td><td>从函数中提取的常量，并提升到静态范围</td></tr>
+<tr><td><span id="provider">provider</span>             </td><td><span id="provider">provider</span>             </td><td>执行查询的函数。</td></tr>
+<tr><td><span id="quantified">quantified</span>         </td><td><span id="quantified">量化</span>         </td><td>在数学或逻辑学中，存在量词和普遍量词被用来提出诸如 &quot;是否有任何类型的T是真的？&quot;或 &quot;这对所有类型的T都是真的吗？&quot;这样的问题</td></tr>
+<tr><td><span id="query">query</span>                   </td><td><span id="query">查询</span>                   </td><td>编译过程中的一个子计算。查询结果可以缓存在当前会话中，也可以缓存到磁盘上，用于增量编译。</td></tr>
+<tr><td><span id="recovery">recovery</span>             </td><td><span id="recovery">恢复</span>             </td><td>恢复是指在解析过程中处理无效的语法（例如，缺少逗号），并继续解析AST。这可以避免向用户显示虚假的错误（例如，当结构定义包含错误时，显示 &quot;缺少字段 &quot;的错误）。</td></tr>
+<tr><td><span id="region">region</span>                 </td><td><span id="region">区域</span>                 </td><td>和生存期精彩使用的另一个术语。</td></tr>
+<tr><td><span id="rib">rib</span>                       </td><td><span id="rib">rib</span>                       </td><td>名称解析器中的一个数据结构，用于跟踪名称的单一范围。</td></tr>
+<tr><td><span id="scrutinee">scrutinee</div>            </td><td><span id="scrutinee">审查对象</div>            </td><td>审查对象是在<code>match</code>表达式和类似模式匹配结构中被匹配的表达式。例如，在<code>match x { A =&gt; 1, B =&gt; 2 }</code>中，表达式<code>x</code>是被审查者。</td></tr>
+<tr><td><span id="sess">sess</span>                     </td><td><span id="sess">sess</span>                     </td><td>编译器会话，它存储了整个编译过程中使用的全局数据</td></tr>
+<tr><td><span id="side-tables">side tables</span>       </td><td><span id="side-tables">side tables</span>       </td><td>由于AST和HIR一旦创建就不可改变，我们经常以哈希表的形式携带关于它们的额外信息，并以特定节点的ID为索引。</td></tr>
+<tr><td><span id="sigil">sigil</span>                   </td><td><span id="sigil">符号</span>                   </td><td>就像一个关键词，但完全由非字母数字的标记组成。例如，<code>&amp;</code>是引用的标志。</td></tr>
+<tr><td><span id="soundness">soundness</span>           </td><td><span id="soundness">健全性</span>           </td><td>类型理论中的一个技术术语。粗略的说，如果一个类型系统是健全的，那么一个进行类型检查的程序就是类型安全的。也就是说，人们永远不可能（在安全的Rust中）把一个值强加到一个错误类型的变量中。</td></tr>
+<tr><td><span id="span">span</span>                     </td><td><span id="span">span</span>                     </td><td>用户的源代码中的一个位置，主要用于错误报告。这就像一个文件名/行号/列的立体元组：它们携带一个开始/结束点，也跟踪宏的扩展和编译器去糖。所有这些都被装在几个字节里（实际上，它是一个表的索引）。</td></tr>
+<tr><td><span id="substs">substs</span>                 </td><td><span id="substs">替换</span>                 </td><td>给定的通用类型或项目的替换（例如，<code>HashMap&lt;i32, u32&gt;</code>中的<code>i32'、</code>u32'）。</td></tr>
+<tr><td><span id="sysroot">sysroot</span>               </td><td><span id="sysroot">sysroot</span>               </td><td>用于编译器在运行时加载的构建工件的目录。</td></tr>
+<tr><td><span id="tag">tag</span>                       </td><td><span id="tag">tag</span>                       </td><td>枚举/生成器的 &quot;标签 &quot;编码激活变体/状态的判别式(discriminant)。 标签可以是 &quot;直接的&quot;（简单地将判别式存储在一个字段中）或使用&quot;利基&quot;。</td></tr>
+<tr><td><span id="tcx">tcx</span>                       </td><td><span id="tcx">tcx</span>                       </td><td>&quot;类型化上下文&quot;（<code>TyCtxt</code>），编译器的主要数据结构。</td></tr>
+<tr><td><span id="lifetime-tcx"><code>'tcx</code></span>           </td><td><span id="lifetime-tcx"><code>'tcx</code></span>           </td><td><code>TyCtxt'所使用的分配区域的生存期。在编译过程中，大多数数据都会使用这个生存期，但HIR数据除外，它使用</code>'hir`生存期。</td></tr>
+<tr><td><span id="token">token</span>                   </td><td><span id="token">词条</span>                   </td><td>解析的最小单位。词条是在词法运算后产生的</td></tr>
+<tr><td><span id="tls"><a href="https://llvm.org/docs/LangRef.html#thread-local-storage-models">TLS</a></span>                     </td><td><span id="tls"><a href="https://llvm.org/docs/LangRef.html#thread-local-storage-models">TLS</a></span>                     </td><td>线程本地存储。变量可以被定义为每个线程都有自己的副本（而不是所有线程都共享该变量）。这与LLVM有一些相互作用。并非所有平台都支持TLS。</td></tr>
+<tr><td><span id="trait-ref">trait reference</span>     </td><td><span id="trait-ref">trait 引用</span>     </td><td>一个特质的名称，以及一组合适的输入类型/生存期。</td></tr>
+<tr><td><span id="trans">trans</span>                   </td><td><span id="trans">trans</span>                   </td><td>是 &quot;转译&quot;的简称，是将MIR转译成LLVM IR的代码。已经重命名为codegen。</td></tr>
+<tr><td><span id="ty"><code>Ty</code></span>                       </td><td><span id="ty"><code>Ty</code></span>                       </td><td>一个类型的内部表示。</td></tr>
+<tr><td><span id="tyctxt">TyCtxt</span>                 </td><td><span id="tyctxt">TyCtxt</span>                 </td><td>在代码中经常被称为tcx的数据结构，它提供对会话数据和查询系统的访问。</td></tr>
+<tr><td><span id="ufcs">UFCS</span>                     </td><td><span id="ufcs">UFCS</span>                     </td><td>通用函数调用语法（Universal Function Call Syntax）的简称，这是一种调用方法的明确语法。</td></tr>
+<tr><td><span id="ut">uninhabited type</span>           </td><td><span id="ut">孤类型</span>           </td><td>一个没有值的类型。这与ZST不同，ZST正好有一个值。一个孤类型的例子是<code>enum Foo {}</code>，它没有变体，所以，永远不能被创建。编译器可以将处理孤类型的代码视为死代码，因为没有这样的值可以操作。<code>！</code>（从未出现过的类型）是一个孤类型。孤类型也被称为 &quot;空类型&quot;。</td></tr>
+<tr><td><span id="upvar">upvar</span>                   </td><td><span id="upvar">upvar</span>                   </td><td>一个闭合体从闭合体外部捕获的变量</td></tr>
+<tr><td><span id="variance">variance</span>             </td><td><span id="variance">型变</span>             </td><td>确定通用类型/寿命参数的变化如何影响子类型；例如，如果<code>T</code>是<code>U</code>的子类型，那么<code>Vec&lt;T&gt;</code>是<code>Vec&lt;U&gt;</code>的子类型，因为<code>Vec</code>在其通用参数中是协变的。</td></tr>
+<tr><td><span id="variant-idx">variant index</span>     </td><td><span id="variant-idx">变体索引</span>     </td><td>在一个枚举中，通过给它们分配从0开始的索引来识别一个变体。这纯粹是内部的，不要与&quot;判别式&quot;相混淆，后者可以被用户覆盖（例如，<code>enum Bool { True = 42, False = 0 }</code>）。</td></tr>
+<tr><td><span id="wide-ptr">wide pointer</span>         </td><td><span id="wide-ptr">宽指针</span>         </td><td>一个带有额外元数据的指针。</td></tr>
+<tr><td><span id="zst">ZST</span>                       </td><td><span id="zst">ZST</span>                       </td><td>零大小类型。这种类型，其值的大小为0字节。由于<code>2^0 = 1</code>，这种类型正好有一个值。例如，<code>()</code>（单位）是一个ZST。<code>struct Foo;</code>也是一个ZST。编译器可以围绕ZST做一些很好的优化。</td></tr>
+</tbody></table>
 <h1><a class="header" href="#附录-c-code-index" id="附录-c-code-index">附录 C: Code Index</a></h1>
 <h1><a class="header" href="#附录-d-compiler-lecture-series" id="附录-d-compiler-lecture-series">附录 D: Compiler Lecture Series</a></h1>
 <h1><a class="header" href="#附录-e-bibliography" id="附录-e-bibliography">附录 E: Bibliography</a></h1>

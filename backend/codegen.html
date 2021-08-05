@@ -167,7 +167,28 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#code-generation" id="code-generation">Code Generation</a></h1>
+                        <h1><a class="header" href="#代码生成" id="代码生成">代码生成</a></h1>
+<p>代码生成或&quot;codegen&quot;是编译器生成可执行二进制文件的一部分。通常，rustc 使用 LLVM 来生成代码; 它也支持 <a href="https://github.com/bytecodealliance/wasmtime/tree/HEAD/cranelift">Cranelift</a>。关键是 rustc 本身并不实现 codegen。但是值得注意的是，在 rust 源代码中，后端的许多部分在名称中都有 <code>codegen</code> (没有严格的界限)。</p>
+<blockquote>
+<p>注意: 如果您正在寻找关于如何调试代码生成错误的提示，请参阅<a href="./debugging.html">调试章节的这一部分</a>。</p>
+</blockquote>
+<h2><a class="header" href="#llvm-是什么" id="llvm-是什么">LLVM 是什么?</a></h2>
+<p><a href="https://llvm.org">LLVM</a> 是“模块化和可重用的编译器和工具链技术的集合”。特别是，LLVM 项目包含一个可插拔的编译器后端(也称为&quot;LLVM&quot;) ，许多编译器项目都使用它，包括 <code>clang</code> C 编译器和我们心爱的 <code>rustc</code>。</p>
+<p>LLVM 接受 LLVM IR 的形式输入。它基本上是带有附加的低级类型和注释的汇编代码。这些注释有助于对 LLVM IR 和输出的机器代码进行优化。所有这一切的最终结果是(最终)一些可执行的东西(例如一个 ELF 对象、一个 EXE 或者一个 wasm)。</p>
+<p>使用 LLVM 有几个好处:</p>
+<ul>
+<li>不需要编写一个完整的编译器后端，减少了实现和维护的负担。</li>
+<li>从 LLVM 项目收集的大量高级优化套件中受益。</li>
+<li>可以自动将 Rust 编译到 LLVM 支持的任何平台上。例如，一旦 LLVM 添加了对 wasm 的支持，瞧！Rustc，clang，和一堆其他语言都能编译成 wasm！(嗯，还有一些额外的工作要做，但我们已经完成了90%)。</li>
+<li>我们和其他编译器项目互相受益. 例如, 当<a href="https://meltdownattack.com/">Spectre 和 Meltdown 安全漏洞</a>被发现，只需要修补 LLVM。</li>
+</ul>
+<h2><a class="header" href="#运行-llvm-链接和元数据生成" id="运行-llvm-链接和元数据生成">运行 LLVM, 链接和元数据生成</a></h2>
+<p>一旦建立了所有函数和静态等的 LLVM IR，就可以开始运行 LLVM 并进行优化。LLVM IR 分为“模块”。可以同时编写多个“模块”，以帮助实现多核使用。这些“模块”就是我们所说的 <em>codegen
+units</em>。这些单元是在单态化收集阶段建立起来的。</p>
+<p>一旦 LLVM 从这些模块生成对象，这些对象就会被传递给链接器，还可以选择生成元数据对象和归档文件或可执行文件。</p>
+<p>运行优化的不一定是上面描述的代码原阶段。对于某些类型的 LTO，优化可能发生在链路时间。在将对象传递到链接器之前还可能进行一些优化，而在链接过程中也可能进行一些优化。</p>
+<p>这些都发生在编译的最后阶段。代码可以在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/back/index.html"><code>rustc_codegen_ssa::back</code></a> 和 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_llvm/back/index.html"><code>rustc_codegen_llvm::back</code></a> 中找到。遗憾的是，这段代码与 LLVM 相关的代码并没有很好地分离; <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/index.html"><code>rustc_codegen_ssa</code></a> 包含了大量特定于 LLVM 后端的代码。</p>
+<p>一旦这些组件完成了它们的工作，您的文件系统中就会出现许多与您所请求的输出相对应的文件。</p>
 
                     </main>
 

@@ -167,7 +167,23 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#lowering-mir" id="lowering-mir">Lowering MIR</a></h1>
+                        <h1><a class="header" href="#降级-mir-到-codegen-ir" id="降级-mir-到-codegen-ir">降级 MIR 到 Codegen IR</a></h1>
+<p>现在我们有了一个要从收集器生成的符号列表，我们需要生成某种类型的代码 codegen IR。在本章中，我们将假设是 LLVM IR，因为这是 rustc 常用的。实际的单态化是在我们翻译的过程中进行的。</p>
+<p>回想一下，后端是由 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/base/fn.codegen_crate.html"><code>rustc_codegen_ssa::base::codegen_crate</code></a> 开始的。最终到达 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/fn.codegen_mir.html"><code>rustc_codegen_ssa::mir::codegen_mir</code></a>，从 MIR 降级到 LLVM IR。</p>
+<p>该代码被分成处理特定 MIR 原语的模块:</p>
+<ul>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/block/index.html"><code>rustc_codegen_ssa::mir::block</code></a> 将处理翻译块及其终结符。这个模块做的最复杂也是最有趣的事情是为函数调用生成代码，包括必要的展开处理 IR。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/statement/index.html"><code>rustc_codegen_ssa::mir::statement</code></a> 翻译 MIR 语句。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/operand/index.html"><code>rustc_codegen_ssa::mir::operand</code></a> 翻译 MIR 操作。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/place/index.html"><code>rustc_codegen_ssa::mir::place</code></a> 翻译 MIR 位置参考。</li>
+<li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/rvalue/index.html"><code>rustc_codegen_ssa::mir::rvalue</code></a> 翻译 MIR 右值。</li>
+</ul>
+<p>在转换一个函数之前，将运行一些简单的和基本的分析步骤以帮助我们生成更简单、更有效的 LLVM IR。这种分析方法的一个例子是找出哪些变量类似于 SSA，这样我们就可以直接将它们转换为 SSA，而不必依赖 LLVM 的 <code>mem2reg</code> 来处理这些变量。分析可以在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/analyze/index.html"><code>rustc_codegen_ssa::mir::analyze</code></a> 中找到。</p>
+<p>通常一个 MIR 基本块会映射到一个 LLVM 基本块，除了极少数的例外: 内部调用或函数调用以及较少的基本的像 <code>assert</code> 这样 MIR 语句可能会产生多个基本块。这是对代码生成中不可移植的 LLVM 特定部分的完美诠释。内部生成是相当容易理解的，因为它涉及的抽象级别很低，可以在<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_llvm/intrinsic/index.html"><code>rustc_codegen_llvm::intrinsic</code></a> 中找到。</p>
+<p>其他的都将使用<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_llvm/builder/index.html">builder interface</a>，这是在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_codegen_ssa/mir/index.html"><code>rustc_codegen_ssa::mir::*</code></a> 模块中调用的代码。</p>
+<blockquote>
+<p>TODO: 讨论常量是如何生成的</p>
+</blockquote>
 
                     </main>
 

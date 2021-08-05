@@ -167,7 +167,27 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#mir-visitor-and-traversal" id="mir-visitor-and-traversal">MIR visitor and traversal</a></h1>
+                        <h1><a class="header" href="#mir-visitor" id="mir-visitor">MIR visitor</a></h1>
+<p>MIR visitor 是遍历 MIR 并查找事物或对其进行更改的便捷工具。Visitor trait 是在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/mir/visit/index.html">the <code>rustc_middle::mir::visit</code> module</a> 中定义的-其中有两个是通过单个宏生成的：<code>Visitor</code>（工作于 <code>&amp;Mir</code> 之上，返回共享引用）和 <code>MutVisitor</code>（工作于 <code>&amp;mut Mir</code>之上，并返回可变引用）。</p>
+<p>要实现 Visitor，您必须创建一个代表您的 Visitor 的类型。
+通常，此类型希望在处理 MIR 时“挂”到您需要的任何状态上：</p>
+<pre><code class="language-rust ignore">struct MyVisitor&lt;...&gt; {
+    tcx: TyCtxt&lt;'tcx&gt;,
+    ...
+}
+</code></pre>
+<p>然后为该类型实现 <code>Visitor</code> 或 <code>MutVisitor</code>：</p>
+<pre><code class="language-rust ignore">impl&lt;'tcx&gt; MutVisitor&lt;'tcx&gt; for NoLandingPads {
+    fn visit_foo(&amp;mut self, ...) {
+        ...
+        self.super_foo(...);
+    }
+}
+</code></pre>
+<p>如上所示，在实现过程中，您可以覆盖任何 <code>visit_foo</code> 方法（例如，<code>visit_terminator</code>），以便编写一些代码，这些代码将在遇到<code>foo</code> 时执行。如果要递归遍历foo的内容，则可以调用 <code>super_foo</code> 方法。 （注意：您永远都不应该覆盖 <code>super_foo</code>）</p>
+<p>一个非常简单的 Visitor 示例可以在 <a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir/transform/no_landing_pads/struct.NoLandingPads.html"><code>NoLandingPads</code></a> 中找到。该 Visitor 甚至不需要任何状态：它仅访问所有终止符并删除其“展开”的后继者。</p>
+<h2><a class="header" href="#遍历" id="遍历">遍历</a></h2>
+<p>除了 Visitor 之外，<a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/mir/traversal/index.html"><code>rustc_middle::mir::traversal</code> 模块</a> 也包含一些有用的函数，用于以<a href="https://en.wikipedia.org/wiki/Tree_traversal">不同的标准顺序</a>（例如，前序，反向后序，依此类推）遍历 MIR CFG。</p>
 
                     </main>
 
